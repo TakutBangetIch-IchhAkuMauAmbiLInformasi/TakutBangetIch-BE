@@ -9,9 +9,7 @@ class Settings(BaseSettings):
     # Elasticsearch Settings
     ELASTICSEARCH_URL: str = "http://localhost:9200"  # Default fallback URL
     ELASTICSEARCH_API_KEY: Optional[str] = None
-    
-    # Model Settings
-    MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
+
     
     class Config:
         env_file = ".env"

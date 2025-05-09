@@ -6,6 +6,7 @@ from pathlib import Path
 import logging
 from tqdm import tqdm
 import torch
+import re
 
 # Add the parent directory to Python path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -30,14 +31,14 @@ async def index_arxiv_data():
         
         # Create index with proper mappings
         await es_service.create_index()
-        logger.info("Index created successfully with proper mappings")
+        logger.info("Index created successfully with enhanced metadata mappings")
         
         # Load the JSON data
         logger.info("Loading arXiv data from JSON file...")
         json_file_path = r"C:\Users\Asus\Documents\Semester 6\TBI\TugasKelompok\TakutBangetIch-BE\app\data\arxiv1k.jsonl"
         
         # Process documents in batches
-        batch_size = 100
+        batch_size = 50  # Reduced batch size for enhanced embeddings
         total_docs = 0
         processed_docs = 0
         
@@ -46,7 +47,7 @@ async def index_arxiv_data():
             for _ in f:
                 total_docs += 1
         
-        logger.info(f"Found {total_docs} documents to process")
+        logger.info(f"Found {total_docs} documents to process with enhanced embeddings")
         
         # Process documents in batches
         with open(json_file_path, 'r', encoding='utf-8') as f:
@@ -57,31 +58,18 @@ async def index_arxiv_data():
                     # Parse JSON document
                     doc = json.loads(line.strip())
                     
-                    # Generate BERT embedding for combined title and abstract
-                    combined_text = f"{doc['title']} {doc['abstract']}"
-                    embedding = es_service.get_bert_embedding(combined_text)
+                    # Clean up data
+                    doc = clean_document(doc)
                     
-                    # Prepare document for indexing
-                    indexed_doc = {
-                        "id": doc["id"],
-                        "title": doc["title"],
-                        "abstract": doc["abstract"],
-                        "authors": doc["authors"],
-                        "categories": doc["categories"],
-                        "doi": doc["doi"],
-                        "submitter": doc["submitter"],
-                        "year": doc["year"],
-                        "embedding": embedding.tolist()
-                    }
-                    
-                    batch.append(indexed_doc)
+                    batch.append(doc)
                     
                     if len(batch) >= batch_size:
-                        # Bulk index the batch
+                        # Bulk index the batch with enhanced embeddings
+                        logger.info(f"Generating enhanced embeddings for batch of {len(batch)} documents...")
                         await es_service.bulk_index(batch)
                         
                         processed_docs += len(batch)
-                        logger.info(f"Indexed {processed_docs}/{total_docs} documents")
+                        logger.info(f"Indexed {processed_docs}/{total_docs} documents with enhanced embeddings")
                         
                         # Clear batch
                         batch = []
@@ -89,6 +77,7 @@ async def index_arxiv_data():
                         # Clear CUDA cache if using GPU
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
+                            logger.info("Cleared GPU cache")
                             
                 except json.JSONDecodeError as e:
                     logger.error(f"Error decoding JSON: {str(e)}")
@@ -99,21 +88,44 @@ async def index_arxiv_data():
             
             # Process remaining documents
             if batch:
+                logger.info(f"Generating enhanced embeddings for final batch of {len(batch)} documents...")
                 await es_service.bulk_index(batch)
                 processed_docs += len(batch)
-                logger.info(f"Indexed {processed_docs}/{total_docs} documents")
+                logger.info(f"Indexed {processed_docs}/{total_docs} documents with enhanced embeddings")
         
         # Refresh index to make documents searchable
         await es_service.es.indices.refresh(index=es_service.index_name)
         logger.info("Index refreshed - all documents are now searchable")
         
-        logger.info("Indexing completed successfully!")
+        logger.info("Indexing with enhanced embeddings completed successfully!")
         
     except Exception as e:
         logger.error(f"Error during indexing: {str(e)}")
         raise
     finally:
         await es_service.close()
+
+def clean_document(doc):
+    """Clean and normalize document fields"""
+    # Ensure all fields exist
+    for field in ['id', 'title', 'abstract', 'authors', 'categories', 'doi', 'submitter', 'year']:
+        if field not in doc:
+            doc[field] = ""
+    
+    # Convert year to string if it's numeric
+    if isinstance(doc['year'], int):
+        doc['year'] = str(doc['year'])
+    
+    # Normalize categories (remove extra spaces, lowercase)
+    if doc['categories']:
+        categories = doc['categories'].split(',')
+        doc['categories'] = ','.join([c.strip() for c in categories])
+    
+    # Ensure authors is a string
+    if isinstance(doc['authors'], list):
+        doc['authors'] = ', '.join(doc['authors'])
+    
+    return doc
 
 if __name__ == "__main__":
     asyncio.run(index_arxiv_data()) 

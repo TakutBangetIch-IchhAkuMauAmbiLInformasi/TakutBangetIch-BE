@@ -26,6 +26,43 @@ class ElasticsearchService:
             outputs = self.model(**inputs)
             embeddings = outputs.last_hidden_state[:, 0, :].numpy()
         return embeddings[0]
+    
+    def get_enhanced_embedding(self, doc: Dict) -> np.ndarray:
+        """
+        Generate enhanced BERT embeddings that include semantic metadata sentences
+        """
+        # Create semantic sentences from metadata
+        metadata_sentences = []
+        
+        # Author sentence
+        if doc.get('authors'):
+            metadata_sentences.append(f"This paper was written by {doc['authors']}.")
+        
+        # Categories sentence
+        if doc.get('categories'):
+            metadata_sentences.append(f"This research belongs to the categories {doc['categories']}.")
+        
+        # Year sentence
+        if doc.get('year'):
+            metadata_sentences.append(f"This was published in {doc['year']}.")
+        
+        # DOI sentence
+        if doc.get('doi'):
+            metadata_sentences.append(f"The paper has DOI {doc['doi']}.")
+        
+        # Submitter sentence
+        if doc.get('submitter'):
+            metadata_sentences.append(f"This was submitted by {doc['submitter']}.")
+        
+        # Combine title, abstract, and metadata sentences
+        combined_text = f"{doc['title']} {doc['abstract']} " + " ".join(metadata_sentences)
+        
+        # Truncate if needed to fit BERT's max token length
+        if len(combined_text) > 5000:  # Arbitrary limit to avoid tokenizer issues
+            combined_text = combined_text[:5000]
+        
+        # Generate BERT embedding
+        return self.get_bert_embedding(combined_text)
 
     def cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
         """Calculate cosine similarity between two vectors"""
@@ -48,7 +85,18 @@ class ElasticsearchService:
                                 "author_analyzer": {
                                     "type": "custom",
                                     "tokenizer": "standard",
-                                    "filter": ["lowercase", "trim"]
+                                    "filter": ["lowercase", "trim", "asciifolding"]
+                                },
+                                "category_analyzer": {
+                                    "type": "custom",
+                                    "tokenizer": "keyword",
+                                    "filter": ["lowercase"]
+                                }
+                            },
+                            "normalizer": {
+                                "lowercase_normalizer": {
+                                    "type": "custom",
+                                    "filter": ["lowercase", "asciifolding"]
                                 }
                             }
                         }
@@ -60,38 +108,44 @@ class ElasticsearchService:
                                 "type": "text",
                                 "analyzer": "english",
                                 "fields": {
-                                    "keyword": {"type": "keyword"},
-                                    "completion": {
-                                        "type": "completion"
-                                    }
+                                    "keyword": {"type": "keyword", "normalizer": "lowercase_normalizer"},
+                                    "completion": {"type": "completion"},
+                                    "exact": {"type": "text", "analyzer": "standard"}
                                 }
                             },
                             "abstract": {
                                 "type": "text",
-                                "analyzer": "english"
+                                "analyzer": "english",
+                                "fields": {
+                                    "standard": {"type": "text", "analyzer": "standard"}
+                                }
                             },
                             "authors": {
                                 "type": "text",
                                 "analyzer": "author_analyzer",
                                 "fields": {
-                                    "keyword": {"type": "keyword"}
+                                    "keyword": {"type": "keyword", "normalizer": "lowercase_normalizer"}
                                 }
                             },
                             "categories": {
-                                "type": "keyword"
+                                "type": "keyword",
+                                "fields": {
+                                    "analyzed": {"type": "text", "analyzer": "category_analyzer"}
+                                }
                             },
                             "doi": {
                                 "type": "keyword"
                             },
                             "submitter": {
-                                "type": "keyword"
+                                "type": "keyword",
+                                "fields": {
+                                    "text": {"type": "text", "analyzer": "standard"}
+                                }
                             },
                             "year": {
                                 "type": "keyword",
                                 "fields": {
-                                    "numeric": {
-                                        "type": "integer"
-                                    }
+                                    "numeric": {"type": "integer"}
                                 }
                             },
                             "embedding": {
@@ -99,6 +153,10 @@ class ElasticsearchService:
                                 "dims": 768,
                                 "index": True,
                                 "similarity": "cosine"
+                            },
+                            "all_content": {
+                                "type": "text",
+                                "analyzer": "english"
                             }
                         }
                     }
@@ -106,10 +164,12 @@ class ElasticsearchService:
             )
 
     async def index_document(self, doc: Dict):
-        """Index an arXiv paper document with its BERT embedding"""
-        # Generate BERT embedding for combined title and abstract
-        combined_text = f"{doc['title']} {doc['abstract']}"
-        embedding = self.get_bert_embedding(combined_text)
+        """Index an arXiv paper document with semantically enhanced embeddings"""
+        # Generate enhanced embedding with metadata sentences
+        embedding = self.get_enhanced_embedding(doc)
+        
+        # Create a combined field for general search
+        all_content = f"{doc['title']} {doc['abstract']} {doc['authors']} {doc['categories']} {doc['year']}"
         
         # Prepare document for indexing
         document = {
@@ -121,7 +181,8 @@ class ElasticsearchService:
             "doi": doc["doi"],
             "submitter": doc["submitter"],
             "year": doc["year"],
-            "embedding": embedding.tolist()
+            "embedding": embedding.tolist(),
+            "all_content": all_content
         }
         
         await self.es.index(
@@ -131,13 +192,33 @@ class ElasticsearchService:
         )
 
     async def bulk_index(self, documents: List[Dict]):
-        """Bulk index multiple documents"""
+        """Bulk index documents with semantically enhanced embeddings"""
         operations = []
         for doc in documents:
+            # Generate enhanced embedding with metadata sentences
+            embedding = self.get_enhanced_embedding(doc)
+            
+            # Create a combined field for general search
+            all_content = f"{doc['title']} {doc['abstract']} {doc['authors']} {doc['categories']} {doc['year']}"
+            
+            # Prepare document for indexing
+            indexed_doc = {
+                "id": doc["id"],
+                "title": doc["title"],
+                "abstract": doc["abstract"],
+                "authors": doc["authors"],
+                "categories": doc["categories"],
+                "doi": doc["doi"],
+                "submitter": doc["submitter"],
+                "year": doc["year"],
+                "embedding": embedding.tolist(),
+                "all_content": all_content
+            }
+            
             # Add operation type and metadata
             operations.append({"index": {"_index": self.index_name, "_id": doc["id"]}})
             # Add the document body as a separate action
-            operations.append(doc)
+            operations.append(indexed_doc)
         
         await self.es.bulk(body=operations)
 
@@ -151,31 +232,72 @@ class ElasticsearchService:
         text_weight: float = 0.3
     ):
         """
-        Two-stage search:
-        1. BM25 for initial retrieval
+        Two-stage search with enhanced metadata handling:
+        1. BM25 for initial retrieval with expanded field set
         2. Semantic re-ranking of top candidates
         """
         # 1. Initial BM25 retrieval
         initial_query = {
             "query": {
                 "bool": {
-                    "must": [
+                    "should": [
+                        # Search in title with high boost
                         {
                             "multi_match": {
                                 "query": query,
-                                "fields": ["title^3", "abstract^2"],
+                                "fields": ["title^5", "title.exact^3"],
                                 "type": "best_fields",
-                                "operator": "or"
+                                "operator": "or",
+                                "boost": 2.0
+                            }
+                        },
+                        # Search in abstract
+                        {
+                            "match": {
+                                "abstract": {
+                                    "query": query,
+                                    "boost": 1.0
+                                }
+                            }
+                        },
+                        # Search in all content (includes metadata)
+                        {
+                            "match": {
+                                "all_content": {
+                                    "query": query,
+                                    "boost": 0.5
+                                }
+                            }
+                        },
+                        # Author name matches
+                        {
+                            "match": {
+                                "authors": {
+                                    "query": query,
+                                    "boost": 1.5
+                                }
+                            }
+                        },
+                        # Category matches
+                        {
+                            "match": {
+                                "categories.analyzed": {
+                                    "query": query,
+                                    "boost": 1.0
+                                }
                             }
                         }
                     ],
-                    "filter": self._build_filters(filters)
+                    "filter": self._build_filters(filters),
+                    "minimum_should_match": 1
                 }
             },
             "highlight": {
                 "fields": {
                     "title": {},
-                    "abstract": {}
+                    "abstract": {},
+                    "authors": {},
+                    "categories.analyzed": {}
                 }
             },
             "size": 100  # Get more candidates for re-ranking
@@ -220,19 +342,117 @@ class ElasticsearchService:
         }
 
     def _build_filters(self, filters: Optional[Dict]) -> List[Dict]:
-        """Build Elasticsearch filters"""
+        """Build Elasticsearch filters with improved metadata handling"""
         if not filters:
             return []
             
         filter_clauses = []
+        
+        # Author filter with better matching
         if "author" in filters and filters["author"]:
-            filter_clauses.append({"term": {"authors.keyword": filters["author"]}})
+            # Use match query for partial author name matching
+            filter_clauses.append({
+                "match_phrase": {
+                    "authors": {
+                        "query": filters["author"],
+                        "slop": 2  # Allow slight variations in word order
+                    }
+                }
+            })
+        
+        # Category filter with exact matching
         if "category" in filters and filters["category"]:
-            filter_clauses.append({"term": {"categories": filters["category"]}})
+            # Categories can be comma-separated, so we need to handle multiple values
+            if "," in filters["category"]:
+                categories = [c.strip() for c in filters["category"].split(",")]
+                filter_clauses.append({
+                    "terms": {
+                        "categories": categories
+                    }
+                })
+            else:
+                filter_clauses.append({
+                    "term": {
+                        "categories": filters["category"]
+                    }
+                })
+        
+        # Year filter with range support
         if "year" in filters and filters["year"]:
-            filter_clauses.append({"term": {"year": filters["year"]}})
+            # Support year ranges like "2018-2021"
+            if "-" in filters["year"]:
+                start_year, end_year = filters["year"].split("-")
+                filter_clauses.append({
+                    "range": {
+                        "year.numeric": {
+                            "gte": int(start_year),
+                            "lte": int(end_year)
+                        }
+                    }
+                })
+            else:
+                filter_clauses.append({
+                    "term": {
+                        "year": filters["year"]
+                    }
+                })
+        
+        # DOI filter
+        if "doi" in filters and filters["doi"]:
+            filter_clauses.append({
+                "term": {
+                    "doi": filters["doi"]
+                }
+            })
+        
+        # Submitter filter
+        if "submitter" in filters and filters["submitter"]:
+            filter_clauses.append({
+                "match": {
+                    "submitter": filters["submitter"]
+                }
+            })
             
         return filter_clauses
+
+    async def metadata_search(
+        self,
+        metadata_filters: Dict,
+        limit: int = 10,
+        offset: int = 0
+    ):
+        """
+        Search documents using only metadata filters without a text query
+        Useful for browsing papers by category, author, year, etc.
+        """
+        # Build filters from metadata
+        filter_clauses = self._build_filters(metadata_filters)
+        
+        if not filter_clauses:
+            raise ValueError("At least one metadata filter must be provided")
+        
+        # Build the metadata search query
+        metadata_query = {
+            "query": {
+                "bool": {
+                    "filter": filter_clauses
+                }
+            },
+            "size": limit,
+            "from": offset,
+            "sort": [
+                {"year.numeric": {"order": "desc"}},  # Sort by year descending
+                {"_score": {"order": "desc"}}         # Then by relevance
+            ]
+        }
+        
+        # Execute the search
+        response = await self.es.search(
+            index=self.index_name,
+            body=metadata_query
+        )
+        
+        return response
 
     # Multi-search method compatible with current API
     async def multi_search(
@@ -243,15 +463,52 @@ class ElasticsearchService:
         author: Optional[str] = None,
         category: Optional[str] = None,
         year: Optional[str] = None,
+        doi: Optional[str] = None,
+        submitter: Optional[str] = None,
         limit: int = 10,
         offset: int = 0
     ):
-        """Wrapper for search method to maintain API compatibility"""
+        """Enhanced wrapper for search method with better metadata support"""
+        # If query is empty but metadata filters are provided, use metadata search
+        if not query or query.strip() == "":
+            filters = {
+                "author": author,
+                "category": category,
+                "year": year,
+                "doi": doi,
+                "submitter": submitter
+            }
+            # Remove None values
+            filters = {k: v for k, v in filters.items() if v is not None}
+            
+            if filters:
+                return await self.metadata_search(
+                    metadata_filters=filters,
+                    limit=limit,
+                    offset=offset
+                )
+            else:
+                # If no query and no filters, return latest papers
+                return await self.es.search(
+                    index=self.index_name,
+                    body={
+                        "query": {"match_all": {}},
+                        "sort": [{"year.numeric": {"order": "desc"}}],
+                        "size": limit,
+                        "from": offset
+                    }
+                )
+        
+        # If we have a query, use hybrid search
         filters = {
             "author": author,
             "category": category,
-            "year": year
+            "year": year,
+            "doi": doi,
+            "submitter": submitter
         }
+        # Remove None values
+        filters = {k: v for k, v in filters.items() if v is not None}
         
         return await self.search(
             query=query,
@@ -318,8 +575,11 @@ class ElasticsearchService:
             index=self.index_name,
             body={
                 "query": {
-                    "match": {
-                        "authors": author
+                    "match_phrase": {
+                        "authors": {
+                            "query": author,
+                            "slop": 2
+                        }
                     }
                 },
                 "size": limit,
