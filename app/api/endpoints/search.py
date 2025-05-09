@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.models.search import SearchQuery, SearchResponse, SearchResult
 from app.services.elasticsearch_service import ElasticsearchService
-from typing import List
 
 router = APIRouter()
 

@@ -1,5 +1,5 @@
 from elasticsearch import AsyncElasticsearch
-from transformers import BertTokenizer, BertModel
+from transformers import AutoTokenizer, AutoModel  # changed from BertTokenizer, BertModel
 import torch
 from app.core.config import settings
 import numpy as np
@@ -7,28 +7,36 @@ import numpy as np
 class ElasticsearchService:
     def __init__(self):
         # Configure Elasticsearch client with URL and API key
-        self.es = AsyncElasticsearch(
-            settings.ELASTICSEARCH_URL,
-            api_key=settings.ELASTICSEARCH_API_KEY
-        )
-        # Initialize BERT model and tokenizer
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-        self.model = BertModel.from_pretrained('bert-base-uncased')
-        self.model.eval()  # Set to evaluation mode
-        self.index_name = "takutbangetich"
+        if settings.ELASTICSEARCH_API_KEY is not None:
+            self.es = AsyncElasticsearch(
+                settings.ELASTICSEARCH_URL,
+                api_key=settings.ELASTICSEARCH_API_KEY
+            )
 
-    def get_bert_embedding(self, text: str) -> np.ndarray:
-        """Generate BERT embeddings for the given text"""
-        # Tokenize and prepare input
+            if self.es.ping():
+                print("Elasticsearch connection successful")
+        else:
+            self.es = AsyncElasticsearch(
+                settings.ELASTICSEARCH_URL
+            )
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(settings.MODEL_NAME)
+        self.model = AutoModel.from_pretrained(settings.MODEL_NAME)
+        self.model.eval()
+        self.index_name = settings.ELASTICSEARCH_INDEX_NAME
+
+    def get_embedding(self, text: str) -> np.ndarray:
+        """Generate embeddings for the given text using mean pooling"""
         inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
         
-        # Generate embeddings
         with torch.no_grad():
             outputs = self.model(**inputs)
-            # Use [CLS] token embedding as sentence representation
-            embeddings = outputs.last_hidden_state[:, 0, :].numpy()
+            token_embeddings = outputs.last_hidden_state  # shape: [batch, seq_len, hidden_size]
+            attention_mask = inputs['attention_mask'].unsqueeze(-1)  # shape: [batch, seq_len, 1]
+            embeddings = (token_embeddings * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
+            embedding = embeddings[0].cpu().numpy()
         
-        return embeddings[0]  # Return first (and only) embedding
+        return embedding
 
     async def create_index(self):
         """Create the Elasticsearch index with proper mappings"""
@@ -41,8 +49,10 @@ class ElasticsearchService:
                             "title": {"type": "text"},
                             "content": {"type": "text"},
                             "embedding": {
+                                "index": True,
                                 "type": "dense_vector",
-                                "dims": 768  # BERT base dimension
+                                "similarity": "cosine",
+                                "dims": 384 # Adjust based on your model's output size
                             },
                             "metadata": {"type": "object"}
                         }
@@ -51,9 +61,8 @@ class ElasticsearchService:
             )
 
     async def index_document(self, doc_id: str, title: str, content: str, metadata: dict = None):
-        """Index a document with its BERT embedding"""
-        # Generate BERT embedding for the content
-        embedding = self.get_bert_embedding(content)
+        """Index a document with embedding"""
+        embedding = self.get_embedding(content)
         
         document = {
             "title": title,
@@ -69,30 +78,62 @@ class ElasticsearchService:
         )
 
     async def search(self, query: str, limit: int = 10, offset: int = 0):
-        """Search documents using BERT semantic search"""
-        # Generate query embedding using BERT
-        query_embedding = self.get_bert_embedding(query)
+        """Hybrid BM25 + embedding re-ranking"""
+        # generate query embedding
+        query_embedding = self.get_embedding(query)
         
-        # Perform semantic search
+        # Hybrid: BM25 base + embedding-based re-ranking
         response = await self.es.search(
             index=self.index_name,
             body={
                 "query": {
-                    "script_score": {
-                        "query": {"match_all": {}},
-                        "script": {
-                            "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                            "params": {"query_vector": query_embedding.tolist()}
-                        }
+                    "multi_match": {
+                        "query": query,
+                        "fields": ["title^2", "content", "authors", "categories"],
                     }
                 },
                 "size": limit,
-                "from": offset
+                "from": offset,
+                "rescore": {
+                    "window_size": 100,
+                    "query": {
+                        "rescore_query": {
+                            "script_score": {
+                                "query": { "match_all": {} },
+                                "script": {
+                                    "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                                    "params": {
+                                        "query_vector": query_embedding.tolist()
+                                    }
+                                }
+                            }
+                        },
+                        "query_weight": 1.0,
+                        "rescore_query_weight": 2.0
+                    }
+                }
             }
         )
         
         return response
+    
+    async def index_exists(self) -> bool:
+        """Check if the Elasticsearch index exists"""
+        return await self.es.indices.exists(index=self.index_name)
+    
+    async def delete_index(self):
+        """Delete the Elasticsearch index"""
+        if await self.index_exists():
+            await self.es.indices.delete(index=self.index_name)
 
     async def close(self):
         """Close the Elasticsearch connection"""
-        await self.es.close() 
+        await self.es.close()
+
+if __name__ == "__main__":
+    import asyncio
+    # Index must exist (run index_data.py first)
+    es_service = ElasticsearchService()
+    response = asyncio.run(es_service.search("Embedded systems based on ARM processors", limit=1))
+    print(response)
+    asyncio.run(es_service.close())
