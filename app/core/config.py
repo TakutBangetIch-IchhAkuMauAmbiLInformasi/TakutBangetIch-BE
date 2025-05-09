@@ -7,10 +7,8 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "TakutBangetIch Search Engine"
     
     # Elasticsearch Settings
-    ELASTICSEARCH_HOST: str = "localhost"
-    ELASTICSEARCH_PORT: int = 9200
-    ELASTICSEARCH_USERNAME: Optional[str] = None
-    ELASTICSEARCH_PASSWORD: Optional[str] = None
+    ELASTICSEARCH_URL: str = "http://localhost:9200"  # Default fallback URL
+    ELASTICSEARCH_API_KEY: Optional[str] = None
     
     # Model Settings
     MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"

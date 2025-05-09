@@ -1,16 +1,34 @@
 from elasticsearch import AsyncElasticsearch
-from sentence_transformers import SentenceTransformer
+from transformers import BertTokenizer, BertModel
+import torch
 from app.core.config import settings
 import numpy as np
 
 class ElasticsearchService:
     def __init__(self):
+        # Configure Elasticsearch client with URL and API key
         self.es = AsyncElasticsearch(
-            hosts=[f"http://{settings.ELASTICSEARCH_HOST}:{settings.ELASTICSEARCH_PORT}"],
-            basic_auth=(settings.ELASTICSEARCH_USERNAME, settings.ELASTICSEARCH_PASSWORD) if settings.ELASTICSEARCH_USERNAME else None
+            settings.ELASTICSEARCH_URL,
+            api_key=settings.ELASTICSEARCH_API_KEY
         )
-        self.model = SentenceTransformer(settings.MODEL_NAME)
+        # Initialize BERT model and tokenizer
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.model = BertModel.from_pretrained('bert-base-uncased')
+        self.model.eval()  # Set to evaluation mode
         self.index_name = "takutbangetich"
+
+    def get_bert_embedding(self, text: str) -> np.ndarray:
+        """Generate BERT embeddings for the given text"""
+        # Tokenize and prepare input
+        inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        
+        # Generate embeddings
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            # Use [CLS] token embedding as sentence representation
+            embeddings = outputs.last_hidden_state[:, 0, :].numpy()
+        
+        return embeddings[0]  # Return first (and only) embedding
 
     async def create_index(self):
         """Create the Elasticsearch index with proper mappings"""
@@ -24,7 +42,7 @@ class ElasticsearchService:
                             "content": {"type": "text"},
                             "embedding": {
                                 "type": "dense_vector",
-                                "dims": 384  # Dimension for all-MiniLM-L6-v2
+                                "dims": 768  # BERT base dimension
                             },
                             "metadata": {"type": "object"}
                         }
@@ -33,9 +51,9 @@ class ElasticsearchService:
             )
 
     async def index_document(self, doc_id: str, title: str, content: str, metadata: dict = None):
-        """Index a document with its embedding"""
-        # Generate embedding for the content
-        embedding = self.model.encode(content)
+        """Index a document with its BERT embedding"""
+        # Generate BERT embedding for the content
+        embedding = self.get_bert_embedding(content)
         
         document = {
             "title": title,
@@ -51,9 +69,9 @@ class ElasticsearchService:
         )
 
     async def search(self, query: str, limit: int = 10, offset: int = 0):
-        """Search documents using semantic search"""
-        # Generate query embedding
-        query_embedding = self.model.encode(query)
+        """Search documents using BERT semantic search"""
+        # Generate query embedding using BERT
+        query_embedding = self.get_bert_embedding(query)
         
         # Perform semantic search
         response = await self.es.search(
