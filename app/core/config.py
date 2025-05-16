@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     # Elasticsearch Settings
     ELASTICSEARCH_URL: str = "http://localhost:9200"  # Default fallback URL
     ELASTICSEARCH_API_KEY: Optional[str] = None
+    HUGGINGFACEHUB_API_TOKEN: str
 
     
     class Config:
