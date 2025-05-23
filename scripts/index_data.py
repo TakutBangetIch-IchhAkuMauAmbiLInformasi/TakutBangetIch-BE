@@ -4,15 +4,18 @@ import sys
 import os
 from pathlib import Path
 import logging
-from tqdm import tqdm
-import torch
 import re
+import torch
+from tqdm import tqdm
+
+from dotenv import load_dotenv
+
+load_dotenv(".env", override=True)
 
 # Add the parent directory to Python path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from app.services.elasticsearch_service import ElasticsearchService
-from app.core.config import settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,10 +38,11 @@ async def index_arxiv_data():
         
         # Load the JSON data
         logger.info("Loading arXiv data from JSON file...")
-        json_file_path = r"C:\Users\Asus\Documents\Semester 6\TBI\TugasKelompok\TakutBangetIch-BE\app\data\arxiv1k.jsonl"
+        json_file_path = r"scripts\arxiv-csOnly-circa-2025.jsonl"
+        passage_dir = r"scripts\output_pymu"
         
         # Process documents in batches
-        batch_size = 50  # Reduced batch size for enhanced embeddings
+        batch_size = 22
         total_docs = 0
         processed_docs = 0
         
@@ -46,6 +50,9 @@ async def index_arxiv_data():
         with open(json_file_path, 'r', encoding='utf-8') as f:
             for _ in f:
                 total_docs += 1
+
+        if total_docs % batch_size != 0:
+            logger.warning(f"Total documents {total_docs} is not a multiple of batch size {batch_size}.")
         
         logger.info(f"Found {total_docs} documents to process with enhanced embeddings")
         
@@ -53,10 +60,19 @@ async def index_arxiv_data():
         with open(json_file_path, 'r', encoding='utf-8') as f:
             batch = []
             
-            for line in tqdm(f, total=total_docs):
+            for line in tqdm(f, total=total_docs, desc="Processing documents", unit="doc"):
                 try:
                     # Parse JSON document
                     doc = json.loads(line.strip())
+                    doc_id = doc.get('id', None)
+                    if not doc_id:
+                        logger.warning(f"Document ID: {doc_id} is missing, skipping document")
+                        continue
+                    
+                    passage_file = os.path.join(passage_dir, f"{doc_id}.txt")
+                    if os.path.exists(passage_file):
+                        with open(passage_file, 'r', encoding='utf-8') as passage_f:
+                            doc['passage'] = passage_f.read()
                     
                     # Clean up data
                     doc = clean_document(doc)
@@ -82,9 +98,6 @@ async def index_arxiv_data():
                 except json.JSONDecodeError as e:
                     logger.error(f"Error decoding JSON: {str(e)}")
                     continue
-                except Exception as e:
-                    logger.error(f"Error processing document: {str(e)}")
-                    continue
             
             # Process remaining documents
             if batch:
@@ -98,17 +111,34 @@ async def index_arxiv_data():
         logger.info("Index refreshed - all documents are now searchable")
         
         logger.info("Indexing with enhanced embeddings completed successfully!")
+
+        es_service.close()
         
     except Exception as e:
         logger.error(f"Error during indexing: {str(e)}")
         raise
-    finally:
-        await es_service.close()
+
+def clean_text(text, rem_delimiter=False):
+    """Clean and normalize text"""
+    # Remove extra spaces
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Remove non-ASCII characters
+    text = re.sub(r'[^\x00-\x7F]+', ' ', text)
+
+    # remove "--- Page xxx ---" delimiter
+    if rem_delimiter:
+        text = re.sub(r'--- Page \d+ ---', '', text)
+    
+    # Normalize whitespace
+    text = text.strip().lower()
+    
+    return text
 
 def clean_document(doc):
     """Clean and normalize document fields"""
     # Ensure all fields exist
-    for field in ['id', 'title', 'abstract', 'authors', 'categories', 'doi', 'submitter', 'year']:
+    for field in ['id', 'title', 'abstract', 'authors', 'categories', 'doi', 'submitter', 'year', 'passage']:
         if field not in doc:
             doc[field] = ""
     
@@ -124,6 +154,15 @@ def clean_document(doc):
     # Ensure authors is a string
     if isinstance(doc['authors'], list):
         doc['authors'] = ', '.join(doc['authors'])
+
+    if doc['title']:
+        doc['title'] = clean_text(doc['title'])
+
+    if doc['abstract']:
+        doc['abstract'] = clean_text(doc['abstract'])
+    
+    if doc['passage']:
+        doc['passage'] = clean_text(doc['passage'], rem_delimiter=True)
     
     return doc
 
