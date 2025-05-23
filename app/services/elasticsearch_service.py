@@ -1,30 +1,54 @@
 from elasticsearch import AsyncElasticsearch
-from transformers import BertTokenizer, BertModel
+from transformers import AutoTokenizer, AutoModel
 import torch
 from app.core.config import settings
 import numpy as np
-from typing import List, Dict, Optional, Union
-import json
+from typing import List, Dict, Optional
 
 class ElasticsearchService:
     def __init__(self):
         # Configure Elasticsearch client with URL and API key
-        self.es = AsyncElasticsearch(
-            settings.ELASTICSEARCH_URL,
-            api_key=settings.ELASTICSEARCH_API_KEY
-        )
+        if settings.ELASTICSEARCH_API_KEY is not None:
+            self.es = AsyncElasticsearch(
+                settings.ELASTICSEARCH_URL,
+                api_key=settings.ELASTICSEARCH_API_KEY
+            )
+        else:
+            self.es = AsyncElasticsearch(
+                settings.ELASTICSEARCH_URL
+            )
+
         # Initialize BERT model and tokenizer
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-        self.model = BertModel.from_pretrained('bert-base-uncased')
+        self.tokenizer = AutoTokenizer.from_pretrained(settings.EMBEDDINGS_MODEL)
+        self.model = AutoModel.from_pretrained(settings.EMBEDDINGS_MODEL).to(settings.DEVICE)
         self.model.eval()  # Set to evaluation mode
-        self.index_name = "indexpesol"
+        self.index_name = settings.ELASTICSEARCH_INDEX_NAME
 
     def get_bert_embedding(self, text: str) -> np.ndarray:
         """Generate BERT embeddings for the given text"""
-        inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        if not text or not text.strip():
+            # Return zero vector for empty text
+            return torch.zeros(settings.EMBEDDINGS_DIM)
+        
+        inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=settings.MAX_LENGTH)
+        
+        # Check if tokenization resulted in valid tokens
+        if inputs["input_ids"].shape[1] == 0:
+            logging.warning("Tokenization resulted in empty input_ids.")
+            return torch.zeros(settings.EMBEDDINGS_DIM)
+        
         with torch.no_grad():
             outputs = self.model(**inputs)
-            embeddings = outputs.last_hidden_state[:, 0, :].numpy()
+            attention_mask = inputs["attention_mask"]
+            last_hidden = outputs.last_hidden_state
+            
+            # Add safety check for attention mask sum
+            mask_sum = attention_mask.sum(1, keepdim=True)
+            if mask_sum.item() == 0:
+                return torch.zeros(settings.EMBEDDINGS_DIM)
+                
+            embeddings = (last_hidden * attention_mask.unsqueeze(-1)).sum(1) / mask_sum
+
         return embeddings[0]
     
     def get_enhanced_embedding(self, doc: Dict) -> np.ndarray:
@@ -53,13 +77,16 @@ class ElasticsearchService:
         # Submitter sentence
         if doc.get('submitter'):
             metadata_sentences.append(f"This was submitted by {doc['submitter']}.")
+
+        if doc.get('passage'):
+            metadata_sentences.append(f"passage: {doc['passage'][:10_000]}.")
         
         # Combine title, abstract, and metadata sentences
         combined_text = f"{doc['title']} {doc['abstract']} " + " ".join(metadata_sentences)
         
-        # Truncate if needed to fit BERT's max token length
-        if len(combined_text) > 5000:  # Arbitrary limit to avoid tokenizer issues
-            combined_text = combined_text[:5000]
+        # # Truncate if needed to fit BERT's max token length
+        # if len(combined_text) > 5000:  # Arbitrary limit to avoid tokenizer issues
+        #     combined_text = combined_text[:5000]
         
         # Generate BERT embedding
         return self.get_bert_embedding(combined_text)
@@ -120,6 +147,13 @@ class ElasticsearchService:
                                     "standard": {"type": "text", "analyzer": "standard"}
                                 }
                             },
+                            "passage": {
+                                "type": "text",
+                                "analyzer": "english",
+                                "fields": {
+                                    "standard": {"type": "text", "analyzer": "standard"}
+                                }
+                            }, 
                             "authors": {
                                 "type": "text",
                                 "analyzer": "author_analyzer",
@@ -150,7 +184,7 @@ class ElasticsearchService:
                             },
                             "embedding": {
                                 "type": "dense_vector",
-                                "dims": 768,
+                                "dims": settings.EMBEDDINGS_DIM,
                                 "index": True,
                                 "similarity": "cosine"
                             },
@@ -169,7 +203,7 @@ class ElasticsearchService:
         embedding = self.get_enhanced_embedding(doc)
         
         # Create a combined field for general search
-        all_content = f"{doc['title']} {doc['abstract']} {doc['authors']} {doc['categories']} {doc['year']}"
+        all_content = f"{doc['title']} {doc['authors']} {doc['categories']} {doc['year']} {doc['abstract']}"
         
         # Prepare document for indexing
         document = {
@@ -181,6 +215,7 @@ class ElasticsearchService:
             "doi": doc["doi"],
             "submitter": doc["submitter"],
             "year": doc["year"],
+            "passage": doc["passage"],
             "embedding": embedding.tolist(),
             "all_content": all_content
         }
@@ -199,7 +234,7 @@ class ElasticsearchService:
             embedding = self.get_enhanced_embedding(doc)
             
             # Create a combined field for general search
-            all_content = f"{doc['title']} {doc['abstract']} {doc['authors']} {doc['categories']} {doc['year']}"
+            all_content = f"{doc['title']} {doc['authors']} {doc['categories']} {doc['year']} {doc['abstract']} {doc['passage']}"
             
             # Prepare document for indexing
             indexed_doc = {
@@ -211,6 +246,7 @@ class ElasticsearchService:
                 "doi": doc["doi"],
                 "submitter": doc["submitter"],
                 "year": doc["year"],
+                "passage": doc["passage"],
                 "embedding": embedding.tolist(),
                 "all_content": all_content
             }
@@ -591,3 +627,7 @@ class ElasticsearchService:
     async def close(self):
         """Close the Elasticsearch connection"""
         await self.es.close() 
+
+
+if __name__ == "__main__":
+    es_service = ElasticsearchService()
