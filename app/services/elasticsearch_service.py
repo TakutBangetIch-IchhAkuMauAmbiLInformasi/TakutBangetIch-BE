@@ -624,6 +624,29 @@ class ElasticsearchService:
         )
         return response
 
+    async def search_by_id(self, document_id: str):
+        """
+        Search for a document by its ID
+        """
+        try:
+            query = {
+                "query": {
+                    "ids": {
+                        "values": [document_id]
+                    }
+                }
+            }
+            
+            result = await self.es.search(
+                index=self.index_name,
+                body=query
+            )
+            
+            return result
+        except Exception as e:
+            print(f"Error searching by ID: {str(e)}")
+            raise
+
     async def close(self):
         """Close the Elasticsearch connection"""
         await self.es.close() 

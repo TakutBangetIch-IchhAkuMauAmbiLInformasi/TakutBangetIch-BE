@@ -40,11 +40,11 @@ async def search(
                 content=hit["_source"]["abstract"],
                 score=hit["_score"],
                 metadata={
-                    "authors": hit["_source"]["authors"],
-                    "categories": hit["_source"]["categories"],
-                    "doi": hit["_source"]["doi"],
-                    "year": hit["_source"]["year"],
-                    "submitter": hit["_source"]["submitter"]
+                    "authors": hit["_source"].get("authors", "Unknown"),
+                    "categories": hit["_source"].get("categories", ""),
+                    "doi": hit["_source"].get("doi", ""),
+                    "year": hit["_source"].get("year", ""),
+                    "submitter": hit["_source"].get("submitter", "")
                 },
                 highlights=hit.get("highlight")
             )
@@ -115,4 +115,39 @@ async def search_by_doi(
         response = await es_service.search_by_doi(doi)
         return response
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/paper/{paper_id}", response_model=SearchResult)
+async def get_paper_by_id(
+    paper_id: str,
+    es_service: ElasticsearchService = Depends(get_elasticsearch_service)
+):
+    """
+    Get a single paper by its ID
+    """
+    try:
+        # Create a simple filter query to find the paper by ID
+        response = await es_service.search_by_id(paper_id)
+        
+        if not response or not response["hits"]["hits"]:
+            raise HTTPException(status_code=404, detail=f"Paper with ID {paper_id} not found")
+            
+        hit = response["hits"]["hits"][0]
+        result = SearchResult(
+            id=hit["_id"],
+            title=hit["_source"]["title"],
+            content=hit["_source"]["abstract"],
+            score=1.0,  # Default score since we're fetching by ID
+            metadata={
+                "authors": hit["_source"].get("authors", "Unknown"),
+                "categories": hit["_source"].get("categories", ""),
+                "doi": hit["_source"].get("doi", ""),
+                "year": hit["_source"].get("year", ""),
+                "submitter": hit["_source"].get("submitter", "")
+            }
+        )
+        return result
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=str(e))
