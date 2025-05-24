@@ -36,10 +36,8 @@ class DeepSeekService:
             titles.append(paper.title)
 
         papers_text = "\n\n".join(input_texts)
-        titles_text = ", ".join([f"'{title}'" for title in titles])
-
-        # Generate a clean, well-referenced bullet-point summary
-        system_prompt = "You are an expert academic researcher that summarizes scientific papers accurately and concisely."
+        titles_text = ", ".join([f"'{title}'" for title in titles])        # Generate a clean, well-referenced bullet-point summary
+        system_prompt = "You are an expert academic researcher that summarizes scientific papers accurately and concisely. Format your response in clean Markdown."
         user_prompt = (
             f"{papers_text}\n\n"
             f"Based on your query '{query}', these are the most relevant papers:\n\n"
@@ -50,7 +48,9 @@ class DeepSeekService:
             f"   - Specific contributions to the field\n"
             f"3. Every bullet point MUST reference the source paper by number [0], [1], etc.\n"
             f"4. Paraphrase rather than directly quote - explain concisely what each paper says about '{query}'.\n"
-            f"5. Focus only on information relevant to '{query}'.\n\n"
+            f"5. Focus only on information relevant to '{query}'.\n"
+            f"6. Use **bold** for important terms and *italics* for emphasis.\n"
+            f"7. Format your response in clean Markdown with proper headers and bullet points.\n\n"
             f"Summary of '{query}' based on papers: {titles_text}:"
         )
 
@@ -92,8 +92,7 @@ class DeepSeekService:
                             raise Exception(f"Failed to connect to DeepSeek API after {max_retries} attempts: {str(e)}")
                         print(f"Connection error, retrying ({retry_count}/{max_retries}): {str(e)}")
                         await asyncio.sleep(2 * retry_count)  # Exponential backoff
-            
-            # Format the final output with citations
+              # Format the final output with citations
             formatted_output = f"**Summary on '{query}'**\n{summary_part}\n\n**Citations**\n"
             for i, paper_id in enumerate(paper_ids):
                 formatted_output += f"[{i}] {paper_id}\n"
@@ -110,19 +109,26 @@ class DeepSeekService:
         """
         system_prompt = (
             "You are an expert academic researcher specializing in scientific paper analysis. "
-            "Your task is to provide comprehensive insights about a research paper."
+            "Your task is to provide comprehensive insights about a research paper. "
+            "Format your response in clean, well-structured Markdown."
         )
         
         user_prompt = (
             f"Title: {paper.title}\n"
             f"Abstract: {paper.content}\n\n"
             f"Please provide a comprehensive analysis of this research paper with the following structure:\n\n"
-            f"1. **Executive Summary** (2-3 sentences): Provide a clear, concise overview of what this paper is about and its main contribution.\n\n"
-            f"2. **Key Findings** (3-5 bullet points): List the most important discoveries, results, or conclusions from this research.\n\n"
-            f"3. **Methodology** (2-3 sentences): Explain the approach, methods, or techniques used in this study.\n\n"
-            f"4. **Significance & Impact** (2-3 sentences): Discuss why this research matters, its potential applications, or its contribution to the field.\n\n"
-            f"5. **Technical Innovation** (if applicable): Highlight any novel techniques, algorithms, or approaches introduced.\n\n"
+            f"## Executive Summary\n"
+            f"Provide a clear, concise overview (2-3 sentences) of what this paper is about and its main contribution.\n\n"
+            f"## Key Findings\n"
+            f"List the most important discoveries, results, or conclusions from this research (3-5 bullet points).\n\n"
+            f"## Methodology\n"
+            f"Explain the approach, methods, or techniques used in this study (2-3 sentences).\n\n"
+            f"## Significance & Impact\n"
+            f"Discuss why this research matters, its potential applications, or its contribution to the field (2-3 sentences).\n\n"
+            f"## Technical Innovation\n"
+            f"Highlight any novel techniques, algorithms, or approaches introduced (if applicable).\n\n"
             f"Please be specific and focus on the actual content rather than general statements. "
+            f"Use **bold** for important terms, *italics* for emphasis, and `code` for technical terms. "
             f"Use clear, accessible language while maintaining technical accuracy."
         )
 
