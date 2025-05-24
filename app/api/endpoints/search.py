@@ -226,6 +226,7 @@ async def generate_summary(
         # Get search results
         response = await es_service.multi_search(
             query=search_query.query,
+            return_passage=True,
             semantic_weight=search_query.semantic_weight,
             text_weight=search_query.text_weight,
             limit=search_query.limit,
@@ -278,4 +279,3 @@ async def message(
          
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
