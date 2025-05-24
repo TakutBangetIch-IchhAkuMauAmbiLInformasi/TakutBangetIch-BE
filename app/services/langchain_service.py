@@ -18,29 +18,34 @@ class LangchainService:
         
         input_texts = []
         dois = []
+        titles = ""
         for i, paper in enumerate(context[:top_k]):
             paper_info = (
+                f"Paper {i}  >>"
                 f"Title: {paper.title}\n"
                 f"Abstract: {paper.content}\n"
                 f"DOI: {paper.metadata['doi']}\n"
             )
             input_texts.append(paper_info)
             dois.append(paper.metadata['doi'])
+            titles = titles + paper.title+" and"
 
         papers_text = "\n\n".join(input_texts)
 
         # Generate a single paragraph summary combining all papers
         system_prompt = (
-            f"Write one paragraph summarizing these research papers about '{query}'. "
-            f"Start by explaining what '{query}' refers to, then describe how each study contributes to understanding this concept:\n\n"
             f"{papers_text}\n\n"
-            f"Combined One-Paragraph Summary:"
+            f"Start by explaining general concept of '{query}' the first sentence"
+            f"The rest is describing how {top_k} paper ({titles[:-3]}) contributes to understanding {query}:\n\n"
+            f"One-Paragraph for general concept of '{query}' and summary of ({titles[:-3]}) :"
+            
         )
 
+        print(system_prompt)
         # Generate with parameters optimized for coherent single paragraph
         result = self.summarizer(
             system_prompt, 
-            max_new_tokens=250,  # More tokens for comprehensive single paragraph
+            max_new_tokens=300,  # More tokens for comprehensive single paragraph
             do_sample=True,
             temperature=0.5,  # Higher temperature for better flow
             pad_token_id=self.summarizer.tokenizer.eos_token_id,
