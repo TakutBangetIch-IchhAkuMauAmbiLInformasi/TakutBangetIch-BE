@@ -1,31 +1,50 @@
 from elasticsearch import AsyncElasticsearch
-from transformers import BertTokenizer, BertModel
+from transformers import AutoTokenizer, AutoModel
 import torch
 from app.core.config import settings
 import numpy as np
-from typing import List, Dict, Optional, Union
-import json
+from typing import List, Dict, Optional
 
 class ElasticsearchService:
     def __init__(self):
         # Configure Elasticsearch client with URL and API key
-        self.es = AsyncElasticsearch(
-            settings.ELASTICSEARCH_URL,
-            api_key=settings.ELASTICSEARCH_API_KEY
-        )
+        if settings.ELASTICSEARCH_API_KEY is not None:
+            self.es = AsyncElasticsearch(
+                settings.ELASTICSEARCH_URL,
+                api_key=settings.ELASTICSEARCH_API_KEY
+            )
+        else:
+            self.es = AsyncElasticsearch(
+                settings.ELASTICSEARCH_URL
+            )
+
         # Initialize BERT model and tokenizer
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-        self.model = BertModel.from_pretrained('bert-base-uncased')
-        self.model.eval()  # Set to evaluation mode
-        self.index_name = "indexpesol"
+        self.tokenizer = AutoTokenizer.from_pretrained(settings.EMBEDDINGS_MODEL)
+        self.model = AutoModel.from_pretrained(settings.EMBEDDINGS_MODEL).to(settings.DEVICE).eval()
+        self.index_name = settings.ELASTICSEARCH_INDEX_NAME
+        print(f"DEBUG: ELASTICSEARCH_INDEX_NAME = {self.index_name}")
 
     def get_bert_embedding(self, text: str) -> np.ndarray:
         """Generate BERT embeddings for the given text"""
-        inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        if not text or not text.strip():
+            # Return zero vector for empty text
+            print("No text detected")
+            return torch.zeros(settings.EMBEDDINGS_DIM)
+        
+        tokens = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=settings.MAX_LENGTH)
+        
+        # Check if tokenization resulted in valid tokens
+        if tokens["input_ids"].shape[1] == 0:
+            print("Tokenization resulted in empty input_ids.")
+            return torch.zeros(settings.EMBEDDINGS_DIM)
+        
         with torch.no_grad():
-            outputs = self.model(**inputs)
-            embeddings = outputs.last_hidden_state[:, 0, :].numpy()
-        return embeddings[0]
+            outputs = self.model(**tokens).last_hidden_state
+            mask = tokens['attention_mask'].unsqueeze(-1)
+            embeddings = (outputs * mask).sum(dim=1) / mask.sum(dim=1)
+            embeddings = embeddings.squeeze().numpy()
+
+            return embeddings
     
     def get_enhanced_embedding(self, doc: Dict) -> np.ndarray:
         """
@@ -36,30 +55,35 @@ class ElasticsearchService:
         
         # Author sentence
         if doc.get('authors'):
-            metadata_sentences.append(f"This paper was written by {doc['authors']}.")
+            metadata_sentences.append(f"this paper was written by {doc['authors']}.")
         
         # Categories sentence
         if doc.get('categories'):
-            metadata_sentences.append(f"This research belongs to the categories {doc['categories']}.")
+            metadata_sentences.append(f"belongs to the categories {doc['categories']}.")
         
         # Year sentence
         if doc.get('year'):
-            metadata_sentences.append(f"This was published in {doc['year']}.")
-        
-        # DOI sentence
-        if doc.get('doi'):
-            metadata_sentences.append(f"The paper has DOI {doc['doi']}.")
+            metadata_sentences.append(f"published in {doc['year']}.")
         
         # Submitter sentence
         if doc.get('submitter'):
-            metadata_sentences.append(f"This was submitted by {doc['submitter']}.")
+            metadata_sentences.append(f"submitted by {doc['submitter']}.")
+
+        if doc.get('passage'):
+            metadata_sentences.append(f"passage: {doc['passage']}.")
         
         # Combine title, abstract, and metadata sentences
         combined_text = f"{doc['title']} {doc['abstract']} " + " ".join(metadata_sentences)
         
-        # Truncate if needed to fit BERT's max token length
-        if len(combined_text) > 5000:  # Arbitrary limit to avoid tokenizer issues
-            combined_text = combined_text[:5000]
+        # # Truncate if needed to fit BERT's max token length
+        # if len(combined_text) > 5000:  # Arbitrary limit to avoid tokenizer issues
+        #     combined_text = combined_text[:5000]
+        splitted = combined_text.split()
+        if len(splitted) > settings.MAX_LENGTH:
+            bound = int(0.8 * len(splitted)) - 1
+            end = -(int(0.2 * len(splitted)))
+            combined_text = " ".join(splitted[:bound])
+            combined_text += "<truncated>" + " ".join(splitted[end:])
         
         # Generate BERT embedding
         return self.get_bert_embedding(combined_text)
@@ -120,6 +144,13 @@ class ElasticsearchService:
                                     "standard": {"type": "text", "analyzer": "standard"}
                                 }
                             },
+                            "passage": {
+                                "type": "text",
+                                "analyzer": "english",
+                                "fields": {
+                                    "standard": {"type": "text", "analyzer": "standard"}
+                                }
+                            }, 
                             "authors": {
                                 "type": "text",
                                 "analyzer": "author_analyzer",
@@ -150,7 +181,7 @@ class ElasticsearchService:
                             },
                             "embedding": {
                                 "type": "dense_vector",
-                                "dims": 768,
+                                "dims": settings.EMBEDDINGS_DIM,
                                 "index": True,
                                 "similarity": "cosine"
                             },
@@ -166,10 +197,12 @@ class ElasticsearchService:
     async def index_document(self, doc: Dict):
         """Index an arXiv paper document with semantically enhanced embeddings"""
         # Generate enhanced embedding with metadata sentences
+        if settings.DOC_LENGTH_LIMIT > 0: 
+            doc['passage'] = doc['passage'][:min(settings.DOC_LENGTH_LIMIT, len(doc['passage']))]
         embedding = self.get_enhanced_embedding(doc)
         
         # Create a combined field for general search
-        all_content = f"{doc['title']} {doc['abstract']} {doc['authors']} {doc['categories']} {doc['year']}"
+        all_content = f"title {doc['title']} authored by {doc['authors']} has category (categories) {doc['categories']} released in or has year {doc['year']} has abstract {doc['abstract']} with content {doc['passage']}"
         
         # Prepare document for indexing
         document = {
@@ -181,6 +214,7 @@ class ElasticsearchService:
             "doi": doc["doi"],
             "submitter": doc["submitter"],
             "year": doc["year"],
+            "passage": doc["passage"],
             "embedding": embedding.tolist(),
             "all_content": all_content
         }
@@ -191,15 +225,18 @@ class ElasticsearchService:
             body=document
         )
 
-    async def bulk_index(self, documents: List[Dict]):
+    async def bulk_index(self, documents: List[Dict], precompute_embeddings: bool = False):
         """Bulk index documents with semantically enhanced embeddings"""
         operations = []
         for doc in documents:
             # Generate enhanced embedding with metadata sentences
-            embedding = self.get_enhanced_embedding(doc)
+            if not precompute_embeddings:
+                embedding = self.get_enhanced_embedding(doc)
+            else:
+                embedding = doc.get("embedding")
             
             # Create a combined field for general search
-            all_content = f"{doc['title']} {doc['abstract']} {doc['authors']} {doc['categories']} {doc['year']}"
+            all_content = f"{doc['title']} {doc['authors']} {doc['categories']} {doc['year']} {doc['abstract']} {doc['passage']}"
             
             # Prepare document for indexing
             indexed_doc = {
@@ -211,7 +248,8 @@ class ElasticsearchService:
                 "doi": doc["doi"],
                 "submitter": doc["submitter"],
                 "year": doc["year"],
-                "embedding": embedding.tolist(),
+                "passage": doc["passage"],
+                "embedding": embedding.tolist() if not isinstance(embedding, list) else embedding,
                 "all_content": all_content
             }
             
@@ -220,7 +258,7 @@ class ElasticsearchService:
             # Add the document body as a separate action
             operations.append(indexed_doc)
         
-        await self.es.bulk(body=operations)
+        await self.es.bulk(body=operations, refresh="wait_for")
 
     async def search(
         self,
@@ -289,7 +327,7 @@ class ElasticsearchService:
                         }
                     ],
                     "filter": self._build_filters(filters),
-                    "minimum_should_match": 1
+                    "minimum_should_match": 0
                 }
             },
             "highlight": {
@@ -311,6 +349,7 @@ class ElasticsearchService:
 
         hits = initial_response["hits"]["hits"]
         if not hits:
+            print("No hits found in initial search.")
             return initial_response
 
         # 2. Re-rank top candidates with semantic search
@@ -322,7 +361,7 @@ class ElasticsearchService:
             semantic_score = self.cosine_similarity(query_embedding, doc_embedding)
             
             # Normalize BM25 score (varies widely)
-            bm25_score = hit["_score"] / 10  # Simple normalization
+            bm25_score = hit["_score"] / initial_response["hits"]["max_score"]
             
             # Combine scores with weights
             hit["_score"] = semantic_weight * semantic_score + text_weight * bm25_score
@@ -587,7 +626,21 @@ class ElasticsearchService:
             }
         )
         return response
+    
+    # Add this to your elasticsearch_service.py for debugging
+    async def debug_index_stats(self):
+        """Debug method to check index statistics"""
+        stats = await self.es.indices.stats(index=self.index_name)
+        count = await self.es.count(index=self.index_name)
+        return {
+            "index_stats": stats,
+            "document_count": count
+        }
 
     async def close(self):
         """Close the Elasticsearch connection"""
         await self.es.close() 
+
+
+if __name__ == "__main__":
+    es_service = ElasticsearchService()

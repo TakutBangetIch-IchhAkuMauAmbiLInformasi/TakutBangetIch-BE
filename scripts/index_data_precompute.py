@@ -7,6 +7,7 @@ import logging
 import re
 import torch
 from tqdm import tqdm
+import numpy as np
 
 from dotenv import load_dotenv
 
@@ -41,6 +42,12 @@ async def index_arxiv_data():
         json_file_path = r"scripts\arxiv-csOnly-circa-2025.jsonl"
         passage_dir = r"scripts\output_pymu"
         
+        data = np.load(r"scripts\arxiv_embeddings.npz")
+
+        # Access the arrays
+        ids = data["ids"]           # shape: (N,) — string IDs
+        embeddings = data["embeddings"]  # shape: (N, 768) — float32 vectors
+        
         # Process documents in batches
         batch_size = 22
         total_docs = 0
@@ -64,7 +71,7 @@ async def index_arxiv_data():
                 try:
                     # Parse JSON document
                     doc = json.loads(line.strip())
-                    doc_id = doc.get('id', None)
+                    doc_id = str(doc.get('id', None))
                     if not doc_id:
                         logger.warning(f"Document ID: {doc_id} is missing, skipping document")
                         continue
@@ -73,6 +80,17 @@ async def index_arxiv_data():
                     if os.path.exists(passage_file):
                         with open(passage_file, 'r', encoding='utf-8') as passage_f:
                             doc['passage'] = passage_f.read()
+
+                    if not doc_id in ids:
+                        logger.warning(f"Document ID: {doc_id} not found in embeddings, skipping document")
+                        continue
+                    else:
+                        # Get the corresponding embedding
+                        embedding = embeddings[ids == doc_id]
+                        if len(embedding) == 0:
+                            logger.warning(f"Embedding for Document ID: {doc_id} not found, skipping document")
+                            continue
+                        doc['embedding'] = embedding.tolist()[0]
                     
                     # Clean up data
                     doc = clean_document(doc)
@@ -82,7 +100,7 @@ async def index_arxiv_data():
                     if len(batch) >= batch_size:
                         # Bulk index the batch with enhanced embeddings
                         logger.info(f"Generating enhanced embeddings for batch of {len(batch)} documents...")
-                        await es_service.bulk_index(batch)
+                        await es_service.bulk_index(batch, precompute_embeddings=True)
                         
                         processed_docs += len(batch)
                         logger.info(f"Indexed {processed_docs}/{total_docs} documents with enhanced embeddings")
@@ -102,7 +120,7 @@ async def index_arxiv_data():
             # Process remaining documents
             if batch:
                 logger.info(f"Generating enhanced embeddings for final batch of {len(batch)} documents...")
-                await es_service.bulk_index(batch)
+                await es_service.bulk_index(batch, precompute_embeddings=True)
                 processed_docs += len(batch)
                 logger.info(f"Indexed {processed_docs}/{total_docs} documents with enhanced embeddings")
         
@@ -111,6 +129,9 @@ async def index_arxiv_data():
         logger.info("Index refreshed - all documents are now searchable")
         
         logger.info("Indexing with enhanced embeddings completed successfully!")
+
+        count = await es_service.es.count(index=es_service.index_name)
+        print("Final document count:", count["count"])
 
         await es_service.close()
         
