@@ -1,4 +1,6 @@
+import asyncio
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from app.models.search import SearchQuery, SearchResponse, SearchResult, SummarizeResult
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.langchain_service import LangchainService
@@ -29,11 +31,13 @@ async def get_elasticsearch_service():
 async def get_langchain_service() -> LangchainService:
     return langchain_service
 
-        
+
+     
 @router.post("/search", response_model=SearchResponse)
 async def search(
     query: SearchQuery,
-    es_service: ElasticsearchService = Depends(get_elasticsearch_service)
+    es_service: ElasticsearchService = Depends(get_elasticsearch_service),
+    lc_service: LangchainService = Depends(get_langchain_service)
 ):
     """
     Perform hybrid search combining semantic and text-based search
@@ -68,8 +72,9 @@ async def search(
             )
             for hit in hits
         ]
-        
+        print("summarizing")
         return SearchResponse(
+            summary= lc_service.summarize(query.query,results),
             results=results,
             total=response["hits"]["total"]["value"],
             query=query.query
@@ -139,7 +144,7 @@ async def search_by_doi(
 
 
 @router.get("/summary",response_model=SummarizeResult)
-async def search_by_doi(
+async def summary_top_k(
     doi: str,
     es_service: ElasticsearchService = Depends(get_elasticsearch_service),
     lc_service: LangchainService = Depends(get_langchain_service)

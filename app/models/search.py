@@ -20,6 +20,7 @@ class SearchResult(BaseModel):
     highlights: Optional[Dict[str, List[str]]] = None
 
 class SearchResponse(BaseModel):
+    summary: str
     results: List[SearchResult]
     total: int
     query: str 
