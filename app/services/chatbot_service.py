@@ -141,10 +141,12 @@ class ChatBotService:
                         )
                         for hit in hits
                     ]
+                    title = [res.title for res in results]
+                    print(title)
                     summary = await self.summarize(message, results)
                     messages.append({"role": "system", "content": f"Summary information: {summary}"})
                     messages.append({"role": "system", "content": f"Answer {message} based on the summary Information"}) 
-                    messages.append({"role": "system", "content": f"Always add Citation from the given summary information [Citation example from summary information: **Citations** [0] 2503.04110 [1] 2501.06293 [2] 2501.17037]!"}) 
+                    messages.append({"role": "system", "content": f"Always add Citation from the given summary information [Citation example from summary information: **Citations** [0] interchat: enhancing generative visual analytics using multimodal interactions' [1] 'lensnet: enhancing real-time microlensing event discovery with recurrent neural networks in the korea microlensing telescope network' [2] 'two-fold byzantine fault tolerance algorithm: byzantine consensus in blockchain'!"}) 
 
                 payload = {
                         "model": self.model_name,
