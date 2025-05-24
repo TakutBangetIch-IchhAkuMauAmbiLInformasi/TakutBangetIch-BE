@@ -266,11 +266,12 @@ class ElasticsearchService:
     async def search(
         self,
         query: str,
+        return_passage: bool = False,
         filters: Optional[Dict] = None,
         limit: int = 10,
         offset: int = 0,
         semantic_weight: float = 0.7,
-        text_weight: float = 0.3
+        text_weight: float = 0.3,
     ):
         """
         Two-stage search with enhanced metadata handling:
@@ -341,13 +342,14 @@ class ElasticsearchService:
                     "categories.analyzed": {}
                 }
             },
-            "size": 100  # Get more candidates for re-ranking
+            "size": 100,  # Get more candidates for re-ranking
         }
 
         # Get initial results
         initial_response = await self.es.search(
             index=self.index_name,
-            body=initial_query
+            body=initial_query,
+            request_timeout=30
         )
 
         hits = initial_response["hits"]["hits"]
@@ -357,7 +359,7 @@ class ElasticsearchService:
 
         # 2. Re-rank top candidates with semantic search
         query_embedding = self.get_bert_embedding(query)
-        
+    
         # Re-rank only top candidates
         for hit in hits:
             doc_embedding = hit["_source"]["embedding"]
@@ -368,6 +370,12 @@ class ElasticsearchService:
             
             # Combine scores with weights
             hit["_score"] = semantic_weight * semantic_score + text_weight * bm25_score
+
+        for hit in hits:
+            if not return_passage:
+                hit["_source"].pop("passage", None)
+            hit["_source"].pop("embedding", None)
+            hit["_source"].pop("all_content", None)
 
         # Sort by combined score
         hits.sort(key=lambda x: x["_score"], reverse=True)
@@ -460,6 +468,7 @@ class ElasticsearchService:
     async def metadata_search(
         self,
         metadata_filters: Dict,
+        return_passage: bool = False,
         limit: int = 10,
         offset: int = 0
     ):
@@ -491,8 +500,16 @@ class ElasticsearchService:
         # Execute the search
         response = await self.es.search(
             index=self.index_name,
-            body=metadata_query
+            body=metadata_query,
+            request_timeout=30
         )
+
+        hits = response["hits"]["hits"]
+        for hit in hits:
+            if not return_passage:
+                hit["_source"].pop("passage", None)
+            hit["_source"].pop("embedding", None)
+            hit["_source"].pop("all_content", None)
         
         return response
 
@@ -500,6 +517,7 @@ class ElasticsearchService:
     async def multi_search(
         self,
         query: str,
+        return_passage: bool = False,
         semantic_weight: float = 0.7,
         text_weight: float = 0.3,
         author: Optional[str] = None,
@@ -531,8 +549,9 @@ class ElasticsearchService:
                 )
             else:
                 # If no query and no filters, return latest papers
-                return await self.es.search(
+                hits = await self.es.search(
                     index=self.index_name,
+                    request_timeout=30,
                     body={
                         "query": {"match_all": {}},
                         "sort": [{"year.numeric": {"order": "desc"}}],
@@ -540,7 +559,14 @@ class ElasticsearchService:
                         "from": offset
                     }
                 )
-        
+            
+                for hit in hits["hits"]["hits"]:
+                    if not return_passage:
+                        hit["_source"].pop("passage", None)
+                    hit["_source"].pop("embedding", None)
+                    hit["_source"].pop("all_content", None)
+
+                return hits
         # If we have a query, use hybrid search
         filters = {
             "author": author,
@@ -551,8 +577,9 @@ class ElasticsearchService:
         }
         # Remove None values
         filters = {k: v for k, v in filters.items() if v is not None}
-        return await self.search(
+        return await self.search (
             query=query,
+            return_passage=return_passage,
             filters=filters,
             limit=limit,
             offset=offset,
@@ -564,6 +591,7 @@ class ElasticsearchService:
         """Search for a paper by its DOI"""
         response = await self.es.search(
             index=self.index_name,
+            request_timeout=30,
             body={
                 "query": {
                     "term": {
@@ -578,6 +606,7 @@ class ElasticsearchService:
         """Get all available categories"""
         response = await self.es.search(
             index=self.index_name,
+            request_timeout=30,
             body={
                 "size": 0,
                 "aggs": {
@@ -596,6 +625,7 @@ class ElasticsearchService:
         """Search for papers by a specific author"""
         response = await self.es.search(
             index=self.index_name,
+            request_timeout=30,
             body={
                 "query": {
                     "match_phrase": {

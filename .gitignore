@@ -6,3 +6,9 @@ __pycache__/
 .DS_Store 
 
 app/data/
+output_mini/
+parsed_text/
+test_scrap/
+test_scrap_mini/
+
+scripts/output_pymu.zip

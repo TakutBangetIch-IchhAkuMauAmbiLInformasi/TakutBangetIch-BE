@@ -1,17 +1,27 @@
 import asyncio
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from app.models.search import SearchQuery, SearchResponse, SearchResult, SummarizeResult, QuerySummary, QuerySummaryResponse
+from app.models.search import SearchQuery, SearchResponse, SearchResult, SummarizeResult, QuerySummary, QuerySummaryResponse,ChatResponse,ChatRequest
 from app.services.elasticsearch_service import ElasticsearchService
+from app.services.langchain_service import LangchainService
+from app.services.chatbot_service  import ChatBotService
 from app.services.deepseek_service import DeepSeekService
 from typing import List, Dict, Optional
+
 from contextlib import asynccontextmanager
 
+langchain_service: LangchainService | None = None  # global reference
+chatBotService: ChatBotService | None = None
 deepseek_service: DeepSeekService | None = None  # global reference
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global deepseek_service
+    global langchain_service
+    global chatBotService
+    langchain_service = LangchainService()
+    chatBotService = ChatBotService()
     deepseek_service = DeepSeekService()
     print("DeepSeekService initialized")
 
@@ -31,9 +41,14 @@ async def get_elasticsearch_service():
 async def get_deepseek_service() -> DeepSeekService:
     return deepseek_service
 
+async def get_chatbot_service() -> ChatBotService:
+    return chatBotService
+
+     
 @router.post("/search", response_model=SearchResponse)
 async def search(
     query: SearchQuery,
+    return_passage: bool = False,
     es_service: ElasticsearchService = Depends(get_elasticsearch_service)
 ):
     """
@@ -43,6 +58,7 @@ async def search(
     try:
         response = await es_service.multi_search(
             query=query.query,
+            return_passage=query.return_passage,
             semantic_weight=query.semantic_weight,
             text_weight=query.text_weight,
             author=query.author,
@@ -59,7 +75,7 @@ async def search(
                 title=hit["_source"]["title"],
                 content=hit["_source"]["abstract"],
                 score=hit["_score"],
-                passage=hit["_source"]["passage"],  # Include passage as a top-level field
+                passage=hit["_source"]["passage"] if query.return_passage else None,  # Include passage if requested
                 metadata={
                     "authors": hit["_source"]["authors"],
                     "categories": hit["_source"]["categories"],
@@ -241,3 +257,25 @@ async def generate_summary(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def message(
+    message: ChatRequest,
+    chatBotService: ChatBotService = Depends(get_chatbot_service),
+):
+    """
+    Chat with AI assistant using DeepSeek API
+    """
+    try:
+        response = await chatBotService.chat(message = message.message, system_prompt = "Predict the message need query to database or not. you only answer YES or NO \n[explain Neural Network >> YES]\n[explain it further >> NO]")
+        
+        return ChatResponse(
+            message=message.message,
+            response=response,
+            status="success"
+        )
+         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
