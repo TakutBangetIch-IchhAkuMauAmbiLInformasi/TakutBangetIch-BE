@@ -4,7 +4,6 @@ import torch
 from app.core.config import settings
 import numpy as np
 from typing import List, Dict, Optional
-from datetime import datetime
 
 class ElasticsearchService:
     def __init__(self):
@@ -260,6 +259,126 @@ class ElasticsearchService:
             operations.append(indexed_doc)
         
         await self.es.bulk(body=operations, refresh="wait_for")
+
+    async def search(
+        self,
+        query: str,
+        filters: Optional[Dict] = None,
+        limit: int = 10,
+        offset: int = 0,
+        semantic_weight: float = 0.7,
+        text_weight: float = 0.3
+    ):
+        """
+        Two-stage search with enhanced metadata handling:
+        1. BM25 for initial retrieval with expanded field set
+        2. Semantic re-ranking of top candidates
+        """
+        # 1. Initial BM25 retrieval
+        initial_query = {
+            "query": {
+                "bool": {
+                    "should": [
+                        # Search in title with high boost
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "fields": ["title^5", "title.exact^3"],
+                                "type": "best_fields",
+                                "operator": "or",
+                                "boost": 2.0
+                            }
+                        },
+                        # Search in abstract
+                        {
+                            "match": {
+                                "abstract": {
+                                    "query": query,
+                                    "boost": 1.0
+                                }
+                            }
+                        },
+                        # Search in all content (includes metadata)
+                        {
+                            "match": {
+                                "all_content": {
+                                    "query": query,
+                                    "boost": 0.5
+                                }
+                            }
+                        },
+                        # Author name matches
+                        {
+                            "match": {
+                                "authors": {
+                                    "query": query,
+                                    "boost": 1.5
+                                }
+                            }
+                        },
+                        # Category matches
+                        {
+                            "match": {
+                                "categories.analyzed": {
+                                    "query": query,
+                                    "boost": 1.0
+                                }
+                            }
+                        }
+                    ],
+                    "filter": self._build_filters(filters),
+                    "minimum_should_match": 0
+                }
+            },
+            "highlight": {
+                "fields": {
+                    "title": {},
+                    "abstract": {},
+                    "authors": {},
+                    "categories.analyzed": {}
+                }
+            },
+            "size": 100  # Get more candidates for re-ranking
+        }
+
+        # Get initial results
+        initial_response = await self.es.search(
+            index=self.index_name,
+            body=initial_query
+        )
+
+        hits = initial_response["hits"]["hits"]
+        if not hits:
+            print("No hits found in initial search.")
+            return initial_response
+
+        # 2. Re-rank top candidates with semantic search
+        query_embedding = self.get_bert_embedding(query)
+        
+        # Re-rank only top candidates
+        for hit in hits:
+            doc_embedding = hit["_source"]["embedding"]
+            semantic_score = self.cosine_similarity(query_embedding, doc_embedding)
+            
+            # Normalize BM25 score (varies widely)
+            bm25_score = hit["_score"] / initial_response["hits"]["max_score"]
+            
+            # Combine scores with weights
+            hit["_score"] = semantic_weight * semantic_score + text_weight * bm25_score
+
+        # Sort by combined score
+        hits.sort(key=lambda x: x["_score"], reverse=True)
+
+        # Apply pagination
+        paginated_hits = hits[offset:offset + limit]
+
+        # Return re-ranked results
+        return {
+            "hits": {
+                "total": {"value": len(hits)},
+                "hits": paginated_hits
+            }
+        }
 
     def _build_filters(self, filters: Optional[Dict]) -> List[Dict]:
         """Build Elasticsearch filters with improved metadata handling"""
