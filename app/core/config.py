@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     MAX_LENGTH: int = 4096
     EMBEDDINGS_DIM: int = 768
     DEVICE: str = "cpu"
+
+    DOC_LENGTH_LIMIT: int = 0
     
     class Config:
         project_root = Path(__file__).parent.parent.parent
