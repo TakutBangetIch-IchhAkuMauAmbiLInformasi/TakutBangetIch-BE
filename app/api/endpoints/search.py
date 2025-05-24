@@ -125,6 +125,47 @@ async def search_by_doi(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/paper/{id}", response_model=SearchResult)
+async def get_paper_by_id(
+    id: str,
+    es_service: ElasticsearchService = Depends(get_elasticsearch_service)
+):
+    """
+    Get a specific paper by its ID
+    """
+    try:
+        response = await es_service.search_by_id(id)
+        
+        # Check if we found the paper
+        if response["hits"]["total"]["value"] == 0:
+            raise HTTPException(status_code=404, detail=f"Paper with ID {id} not found")
+        
+        # Extract the first hit
+        hit = response["hits"]["hits"][0]
+        
+        # Format the response as a SearchResult
+        result = SearchResult(
+            id=hit["_id"],
+            title=hit["_source"]["title"],
+            content=hit["_source"]["abstract"],
+            score=hit["_score"],
+            passage=hit["_source"]["passage"],
+            metadata={
+                "authors": hit["_source"]["authors"],
+                "categories": hit["_source"]["categories"],
+                "doi": hit["_source"]["doi"],
+                "year": hit["_source"]["year"],
+                "submitter": hit["_source"]["submitter"]
+            }
+        )
+        
+        return result
+    except HTTPException:
+        # Re-raise HTTPExceptions (like 404s)
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/summary",response_model=SummarizeResult)
 async def summary_top_k(
     doi: str,

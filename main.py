@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.endpoints import search
+from app.api.endpoints import search, paper
 from app.core.config import settings
 from app.services.elasticsearch_service import ElasticsearchService
 from dotenv import load_dotenv
@@ -27,6 +27,12 @@ app.include_router(
     search.router,
     prefix=settings.API_V1_STR,
     tags=["search"]
+)
+
+app.include_router(
+    paper.router,
+    prefix=f"{settings.API_V1_STR}/paper",
+    tags=["paper"]
 )
 
 @app.get("/")

@@ -6,16 +6,21 @@ import numpy as np
 from typing import List, Dict, Optional
 
 class ElasticsearchService:
-    def __init__(self):
-        # Configure Elasticsearch client with URL and API key
+    def __init__(self):        # Configure Elasticsearch client with URL and API key
         if settings.ELASTICSEARCH_API_KEY is not None:
             self.es = AsyncElasticsearch(
                 settings.ELASTICSEARCH_URL,
-                api_key=settings.ELASTICSEARCH_API_KEY
+                api_key=settings.ELASTICSEARCH_API_KEY,
+                request_timeout=60,  # 60 seconds timeout
+                retry_on_timeout=True,
+                max_retries=3
             )
         else:
             self.es = AsyncElasticsearch(
-                settings.ELASTICSEARCH_URL
+                settings.ELASTICSEARCH_URL,
+                request_timeout=60,  # 60 seconds timeout
+                retry_on_timeout=True,
+                max_retries=3
             )
 
         # Initialize BERT model and tokenizer
@@ -606,6 +611,20 @@ class ElasticsearchService:
         )
         return response
     
+    async def search_by_id(self, paper_id: str):
+        """Search for a paper directly by its ID"""
+        response = await self.es.search(
+            index=self.index_name,
+            body={
+                "query": {
+                    "term": {
+                        "_id": paper_id
+                    }
+                }
+            }
+        )
+        return response
+
     # Add this to your elasticsearch_service.py for debugging
     async def debug_index_stats(self):
         """Debug method to check index statistics"""
