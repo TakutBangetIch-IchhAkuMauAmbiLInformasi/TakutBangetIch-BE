@@ -1,7 +1,7 @@
 import asyncio
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from app.models.search import SearchQuery, SearchResponse, SearchResult, SummarizeResult
+from app.models.search import SearchQuery, SearchResponse, SearchResult, SummarizeResult, QuerySummary, QuerySummaryResponse
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.langchain_service import LangchainService
 from typing import List, Dict, Optional
@@ -36,11 +36,11 @@ async def get_langchain_service() -> LangchainService:
 @router.post("/search", response_model=SearchResponse)
 async def search(
     query: SearchQuery,
-    es_service: ElasticsearchService = Depends(get_elasticsearch_service),
-    lc_service: LangchainService = Depends(get_langchain_service)
+    es_service: ElasticsearchService = Depends(get_elasticsearch_service)
 ):
     """
     Perform hybrid search combining semantic and text-based search
+    Returns results quickly without summary generation
     """
     try:
         response = await es_service.multi_search(
@@ -72,28 +72,13 @@ async def search(
             )
             for hit in hits
         ]
-        print("summarizing")
+        
+        # Return results immediately without summary
         return SearchResponse(
-            summary= lc_service.summarize(query.query,results),
             results=results,
             total=response["hits"]["total"]["value"],
             query=query.query
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/autocomplete")
-async def autocomplete(
-    prefix: str,
-    limit: int = 5,
-    es_service: ElasticsearchService = Depends(get_elasticsearch_service)
-):
-    """
-    Get title suggestions for autocomplete
-    """
-    try:
-        response = await es_service.autocomplete_title(prefix, limit)
-        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -163,5 +148,59 @@ async def summary_top_k(
         )
          
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/summarize-query", response_model=QuerySummaryResponse)
+async def generate_summary(
+    query_data: QuerySummary,
+    es_service: ElasticsearchService = Depends(get_elasticsearch_service),
+    lc_service: LangchainService = Depends(get_langchain_service)
+):
+    """
+    Generate a summary of search results for a given query
+    This is a separate endpoint to allow asynchronous summary generation
+    """
+    try:
+        # Create search query to get top k results
+        search_query = SearchQuery(
+            query=query_data.query,
+            semantic_weight=0.7,
+            text_weight=0.3,
+            limit=3,  # Use top 3 results for summary
+            offset=0
+        )
+        
+        # Get search results
+        response = await es_service.multi_search(
+            query=search_query.query,
+            semantic_weight=search_query.semantic_weight,
+            text_weight=search_query.text_weight,
+            limit=search_query.limit,
+            offset=search_query.offset
+        )
+        
+        hits = response["hits"]["hits"]
+        results = [
+            SearchResult(
+                id=hit["_id"],
+                title=hit["_source"]["title"],
+                content=hit["_source"]["abstract"],
+                score=hit["_score"],
+                metadata={
+                    "authors": hit["_source"]["authors"],
+                    "categories": hit["_source"]["categories"],
+                    "doi": hit["_source"]["doi"],
+                    "year": hit["_source"]["year"],
+                    "submitter": hit["_source"]["submitter"]
+                }
+            )
+            for hit in hits
+        ]
+        
+        # Generate summary
+        summary = lc_service.summarize(query_data.query, results)
+        return {"summary": summary}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     

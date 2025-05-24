@@ -1,14 +1,13 @@
 from typing import List
-from transformers import pipeline
+from huggingface_hub import InferenceClient
 from app.models.search import SearchResult
 from app.core.config import settings
 
 
 class LangchainService:
     def __init__(self):
-        self.summarizer = pipeline(
-            "text-generation", 
-            model="Qwen/Qwen2.5-0.5B", 
+        self.client = InferenceClient(
+            model="HuggingFaceH4/zephyr-7b-beta",  
             token=settings.HUGGINGFACEHUB_API_TOKEN
         )
 
@@ -24,39 +23,55 @@ class LangchainService:
                 f"Paper {i}  >>"
                 f"Title: {paper.title}\n"
                 f"Abstract: {paper.content}\n"
-                f"DOI: {paper.metadata['doi']}\n"
+                f"ID: {paper.id}\n"
             )
             input_texts.append(paper_info)
-            dois.append(paper.metadata['doi'])
+            dois.append(paper.id)
             titles = titles + paper.title+" and"
 
         papers_text = "\n\n".join(input_texts)
 
         system_prompt = (
-            f"{papers_text}\n\n"
-            f"Start by explaining general concept of '{query}' the first sentence"
-            f"The rest is describing how {top_k} paper ({titles[:-3]}) contributes to understanding {query}:\n\n"
-            f"One-Paragraph for general concept of '{query}' and summary of ({titles[:-3]}) :"
-            
+            f"<|system|>\n"
+            f"You are a scientific research assistant. Provide a comprehensive summary based on the given papers.\n"
+            f"<|user|>\n"
+            f"Research Papers:\n{papers_text}\n\n"
+            f"Task: Write a one-paragraph summary that:\n"
+            f"1. First explains the general concept of '{query}'\n"
+            f"2. Then describes how the {top_k} papers ({titles[:-3]}) contribute to understanding {query}\n\n"
+            f"Please provide a cohesive paragraph summary:\n"
+            f"<|assistant|>\n"
         )
 
         print(system_prompt)
-        result = self.summarizer(
-            system_prompt, 
-            max_new_tokens=300,  # More tokens for comprehensive single paragraph
-            do_sample=True,
-            temperature=0.5,  # Higher temperature for better flow
-            pad_token_id=self.summarizer.tokenizer.eos_token_id,
-            truncation=True,
-            repetition_penalty=1.1  # Prevent repetition of input text
-        )
         
-        generated_text = result[0]['generated_text']
-        summary_part = generated_text[len(system_prompt):].strip()
+        try:
+            # Use Hugging Face Inference API
+            response = self.client.text_generation(
+                prompt=system_prompt,
+                max_new_tokens=300,
+                temperature=0.5,
+                do_sample=True,
+                repetition_penalty=1.1,
+                return_full_text=False  # Only return generated text, not the prompt
+            )
+            
+            # Extract the generated text
+            if isinstance(response, str):
+                summary_part = response.strip()
+            else:
+                # Handle different response formats
+                summary_part = response.get('generated_text', '').strip()
+            
+        except Exception as e:
+            print(f"Error calling Hugging Face API: {e}")
+            return f"Error generating summary: {str(e)}"
         
+        # Clean up the summary
         summary_part = summary_part.replace('\n\n', ' ').replace('\n', ' ').strip()
         
-        formatted_output = f"**Summary** {summary_part}\n\n**Citation**\n"
+        # Format the final output
+        formatted_output = f"**Summary** {summary_part}\n\n**Link**\n"
         for i, doi in enumerate(dois):
             formatted_output += f"[{i}] {doi}\n"
         

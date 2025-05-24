@@ -20,10 +20,20 @@ class SearchResult(BaseModel):
     highlights: Optional[Dict[str, List[str]]] = None
 
 class SearchResponse(BaseModel):
-    summary: str
+    summary: Optional[str] = None
     results: List[SearchResult]
     total: int
     query: str 
 
 class SummarizeResult(BaseModel):
+    id: str
+    content: str
+    metadata: Optional[Dict[str, Any]] = None
+    response_metadata: Optional[Dict[str, Any]] = None
+    usage_metadata: Optional[Dict[str, Any]] = None
+    
+class QuerySummary(BaseModel):
+    query: str
+    
+class QuerySummaryResponse(BaseModel):
     summary: str
