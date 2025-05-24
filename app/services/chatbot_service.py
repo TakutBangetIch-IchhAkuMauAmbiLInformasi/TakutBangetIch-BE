@@ -253,11 +253,12 @@ class ChatBotService:
     async def search(
         self,
         query: str,
+        return_passage: bool = False,
         filters: Optional[Dict] = None,
         limit: int = 10,
         offset: int = 0,
         semantic_weight: float = 0.7,
-        text_weight: float = 0.3
+        text_weight: float = 0.3,
     ):
         """
         Two-stage search with enhanced metadata handling:
@@ -328,13 +329,14 @@ class ChatBotService:
                     "categories.analyzed": {}
                 }
             },
-            "size": 100  # Get more candidates for re-ranking
+            "size": 100,  # Get more candidates for re-ranking
         }
 
         # Get initial results
         initial_response = await self.es.search(
             index=self.index_name,
-            body=initial_query
+            body=initial_query,
+            request_timeout=30
         )
 
         hits = initial_response["hits"]["hits"]
@@ -344,7 +346,7 @@ class ChatBotService:
 
         # 2. Re-rank top candidates with semantic search
         query_embedding = self.get_bert_embedding(query)
-        
+    
         # Re-rank only top candidates
         for hit in hits:
             doc_embedding = hit["_source"]["embedding"]
@@ -355,6 +357,12 @@ class ChatBotService:
             
             # Combine scores with weights
             hit["_score"] = semantic_weight * semantic_score + text_weight * bm25_score
+
+        for hit in hits:
+            if not return_passage:
+                hit["_source"].pop("passage", None)
+            hit["_source"].pop("embedding", None)
+            hit["_source"].pop("all_content", None)
 
         # Sort by combined score
         hits.sort(key=lambda x: x["_score"], reverse=True)
@@ -369,7 +377,7 @@ class ChatBotService:
                 "hits": paginated_hits
             }
         }
-
+    
     def _build_filters(self, filters: Optional[Dict]) -> List[Dict]:
         """Build Elasticsearch filters with improved metadata handling"""
         if not filters:

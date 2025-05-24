@@ -5,23 +5,29 @@ from app.models.search import SearchQuery, SearchResponse, SearchResult, Summari
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.langchain_service import LangchainService
 from app.services.chatbot_service  import ChatBotService
+from app.services.deepseek_service import DeepSeekService
 from typing import List, Dict, Optional
 
 from contextlib import asynccontextmanager
 
 langchain_service: LangchainService | None = None  # global reference
 chatBotService: ChatBotService | None = None
+deepseek_service: DeepSeekService | None = None  # global reference
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global deepseek_service
     global langchain_service
     global chatBotService
     langchain_service = LangchainService()
     chatBotService = ChatBotService()
-    print("LangchainService initialized")
+    deepseek_service = DeepSeekService()
+    print("DeepSeekService initialized")
 
     yield  
 
-    print("LangchainService closed")
+    print("DeepSeekService closed")
 
 router = APIRouter(lifespan=lifespan)
 
@@ -32,8 +38,8 @@ async def get_elasticsearch_service():
     finally:
         await service.close()
 
-async def get_langchain_service() -> LangchainService:
-    return langchain_service
+async def get_deepseek_service() -> DeepSeekService:
+    return deepseek_service
 
 async def get_chatbot_service() -> ChatBotService:
     return chatBotService
@@ -42,6 +48,7 @@ async def get_chatbot_service() -> ChatBotService:
 @router.post("/search", response_model=SearchResponse)
 async def search(
     query: SearchQuery,
+    return_passage: bool = False,
     es_service: ElasticsearchService = Depends(get_elasticsearch_service)
 ):
     """
@@ -51,6 +58,7 @@ async def search(
     try:
         response = await es_service.multi_search(
             query=query.query,
+            return_passage=query.return_passage,
             semantic_weight=query.semantic_weight,
             text_weight=query.text_weight,
             author=query.author,
@@ -67,6 +75,7 @@ async def search(
                 title=hit["_source"]["title"],
                 content=hit["_source"]["abstract"],
                 score=hit["_score"],
+                passage=hit["_source"]["passage"] if query.return_passage else None,  # Include passage if requested
                 metadata={
                     "authors": hit["_source"]["authors"],
                     "categories": hit["_source"]["categories"],
@@ -130,18 +139,16 @@ async def search_by_doi(
         response = await es_service.search_by_doi(doi)
         return response
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
-    
-
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/summary",response_model=SummarizeResult)
 async def summary_top_k(
     doi: str,
     es_service: ElasticsearchService = Depends(get_elasticsearch_service),
-    lc_service: LangchainService = Depends(get_langchain_service)
+    deepseek_service: DeepSeekService = Depends(get_deepseek_service)
 ):
     """
-    Summarize its paper using Langchain Hugginface
+    Summarize its paper using DeepSeek API
     """
     try:
         context={}
@@ -149,9 +156,8 @@ async def summary_top_k(
         doc = response["hits"]["hits"].pop()["_source"]
         context["abstract"] = doc["abstract"]
         context["title"] = doc["title"]
-        return SummarizeResult(
-            summary=lc_service.summarize(context)
-        )
+        context["passage"] = doc["passage"]  # Include the full document passage
+        return await deepseek_service.summarize(context)
          
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -160,7 +166,7 @@ async def summary_top_k(
 async def generate_summary(
     query_data: QuerySummary,
     es_service: ElasticsearchService = Depends(get_elasticsearch_service),
-    lc_service: LangchainService = Depends(get_langchain_service)
+    deepseek_service: DeepSeekService = Depends(get_deepseek_service)
 ):
     """
     Generate a summary of search results for a given query
@@ -192,6 +198,7 @@ async def generate_summary(
                 title=hit["_source"]["title"],
                 content=hit["_source"]["abstract"],
                 score=hit["_score"],
+                passage=hit["_source"]["passage"],  # Include passage as a top-level field 
                 metadata={
                     "authors": hit["_source"]["authors"],
                     "categories": hit["_source"]["categories"],
@@ -204,7 +211,7 @@ async def generate_summary(
         ]
         
         # Generate summary
-        summary = lc_service.summarize(query_data.query, results)
+        summary = await deepseek_service.summarize(query_data.query, results)
         return {"summary": summary}
         
     except Exception as e:
