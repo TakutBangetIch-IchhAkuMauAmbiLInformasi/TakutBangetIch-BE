@@ -16,10 +16,26 @@ class SearchResult(BaseModel):
     title: str
     content: str
     score: float
+    passage: Optional[str] = None  # Full content of the PDF document
     metadata: Optional[Dict[str, Any]] = None
     highlights: Optional[Dict[str, List[str]]] = None
 
 class SearchResponse(BaseModel):
-    results: List[SearchResult]
+    summary: Optional[str] = None
+    results: List[SearchResult]  # Each result includes title, abstract, passage, and metadata
     total: int
-    query: str 
+    query: str
+
+class SummarizeResult(BaseModel):
+    id: str
+    content: str
+    passage: Optional[str] = None  # Full content of the PDF document
+    metadata: Optional[Dict[str, Any]] = None
+    response_metadata: Optional[Dict[str, Any]] = None
+    usage_metadata: Optional[Dict[str, Any]] = None
+    
+class QuerySummary(BaseModel):
+    query: str
+    
+class QuerySummaryResponse(BaseModel):
+    summary: str

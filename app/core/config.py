@@ -10,10 +10,11 @@ class Settings(BaseSettings):
     # API Settings
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "TakutBangetIch Search Engine"
-    
-    # Elasticsearch Settings
+      # Elasticsearch Settings
     ELASTICSEARCH_URL: str = "http://localhost:9200"  # Default fallback URL
     ELASTICSEARCH_API_KEY: Optional[str] = None
+    HUGGINGFACEHUB_API_TOKEN: str
+    DEEPSEEK_KEY: str 
     ELASTICSEARCH_INDEX_NAME: str = "test"
 
     EMBEDDINGS_MODEL: str = "allenai/longformer-base-4096"
