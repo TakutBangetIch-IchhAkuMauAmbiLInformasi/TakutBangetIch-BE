@@ -16,7 +16,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=["*"],  # Use configured origins instead of "*"
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,18 +39,32 @@ app.include_router(
 async def root():
     return {"message": "Welcome to TakutBangetIch Search Engine API"}
 
-# ...existing code...
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Railway"""
+    return {"status": "healthy", "service": "TakutBangetIch Search Engine API"}
+
+# Optional debug endpoint (only for development)
+@app.get("/debug/elasticsearch")
+async def debug_elasticsearch():
+    """Debug endpoint to check Elasticsearch connection"""
+    try:
+        es = ElasticsearchService()
+        stats = await es.debug_index_stats()
+        await es.close()
+        return {
+            "status": "connected", 
+            "document_count": stats.get('document_count', {}).get('count', 0)
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
-    import asyncio
+    import os
     
-    async def debug_and_run():
-        es = ElasticsearchService()
-        stats = await es.debug_index_stats()
-        print(stats['document_count']['count'])
-        
-        await es.es.close()  # Don't forget to close the connection
+    # Get port from environment variable (for Railway) or default to 8001
+    port = int(os.getenv("PORT", 8001))
     
-    asyncio.run(debug_and_run())
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    # Start the server without running debug code automatically
+    uvicorn.run(app, host="0.0.0.0", port=port)
