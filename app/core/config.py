@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ELASTICSEARCH_API_KEY: Optional[str] = None
     HUGGINGFACEHUB_API_TOKEN: str
     ELASTICSEARCH_INDEX_NAME: str = "test"
+    DEEPSEEK_API_KEY: str 
 
     EMBEDDINGS_MODEL: str = "allenai/longformer-base-4096"
     MAX_LENGTH: int = 4096

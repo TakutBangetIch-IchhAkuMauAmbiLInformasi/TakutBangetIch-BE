@@ -37,3 +37,11 @@ class QuerySummary(BaseModel):
     
 class QuerySummaryResponse(BaseModel):
     summary: str
+
+class ChatResponse(BaseModel):
+    message: str
+    response: str
+    status: str = "success"
+
+class ChatRequest(BaseModel):
+    message: str

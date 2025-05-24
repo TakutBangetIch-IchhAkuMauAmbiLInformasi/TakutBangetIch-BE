@@ -1,18 +1,22 @@
 import asyncio
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from app.models.search import SearchQuery, SearchResponse, SearchResult, SummarizeResult, QuerySummary, QuerySummaryResponse
+from app.models.search import SearchQuery, SearchResponse, SearchResult, SummarizeResult, QuerySummary, QuerySummaryResponse,ChatResponse,ChatRequest
 from app.services.elasticsearch_service import ElasticsearchService
 from app.services.langchain_service import LangchainService
+from app.services.chatbot_service  import ChatBotService
 from typing import List, Dict, Optional
+
 from contextlib import asynccontextmanager
 
 langchain_service: LangchainService | None = None  # global reference
-
+chatBotService: ChatBotService | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global langchain_service
+    global chatBotService
     langchain_service = LangchainService()
+    chatBotService = ChatBotService()
     print("LangchainService initialized")
 
     yield  
@@ -31,6 +35,8 @@ async def get_elasticsearch_service():
 async def get_langchain_service() -> LangchainService:
     return langchain_service
 
+async def get_chatbot_service() -> ChatBotService:
+    return chatBotService
 
      
 @router.post("/search", response_model=SearchResponse)
@@ -201,6 +207,27 @@ async def generate_summary(
         summary = lc_service.summarize(query_data.query, results)
         return {"summary": summary}
         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def message(
+    message: ChatRequest,
+    chatBotService: ChatBotService = Depends(get_chatbot_service),
+):
+    """
+    Chat with AI assistant using DeepSeek API
+    """
+    try:
+        response = await chatBotService.chat(message = message.message, system_prompt = "Predict the message need query to database or not. you only answer YES or NO \n[explain Neural Network >> YES]\n[explain it further >> NO]")
+        
+        return ChatResponse(
+            message=message.message,
+            response=response,
+            status="success"
+        )
+         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
