@@ -34,6 +34,7 @@ async def get_deepseek_service() -> DeepSeekService:
 @router.post("/search", response_model=SearchResponse)
 async def search(
     query: SearchQuery,
+    return_passage: bool = False,
     es_service: ElasticsearchService = Depends(get_elasticsearch_service)
 ):
     """
@@ -43,6 +44,7 @@ async def search(
     try:
         response = await es_service.multi_search(
             query=query.query,
+            return_passage=query.return_passage,
             semantic_weight=query.semantic_weight,
             text_weight=query.text_weight,
             author=query.author,
@@ -59,7 +61,7 @@ async def search(
                 title=hit["_source"]["title"],
                 content=hit["_source"]["abstract"],
                 score=hit["_score"],
-                passage=hit["_source"]["passage"],  # Include passage as a top-level field
+                passage=hit["_source"]["passage"] if query.return_passage else None,  # Include passage if requested
                 metadata={
                     "authors": hit["_source"]["authors"],
                     "categories": hit["_source"]["categories"],

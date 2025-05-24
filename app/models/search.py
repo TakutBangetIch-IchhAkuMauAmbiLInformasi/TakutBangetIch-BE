@@ -3,6 +3,7 @@ from typing import List, Optional, Dict, Any
 
 class SearchQuery(BaseModel):
     query: str
+    return_passage: Optional[bool] = Field(default=False, description="Whether to return the full passage content")
     semantic_weight: Optional[float] = Field(default=0.7, ge=0.0, le=1.0, description="Weight for semantic search component")
     text_weight: Optional[float] = Field(default=0.3, ge=0.0, le=1.0, description="Weight for text search component")
     author: Optional[str] = None
