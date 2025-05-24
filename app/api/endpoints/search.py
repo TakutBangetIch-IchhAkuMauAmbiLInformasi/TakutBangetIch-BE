@@ -158,7 +158,9 @@ async def summary_top_k(
         doc = response["hits"]["hits"].pop()["_source"]
         context["abstract"] = doc["abstract"]
         context["title"] = doc["title"]
-        return lc_service.summarize(context)
+        return SummarizeResult(
+            summary=lc_service.summarize(context)
+        )
          
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 

@@ -26,8 +26,4 @@ class SearchResponse(BaseModel):
     query: str 
 
 class SummarizeResult(BaseModel):
-    id: str
-    content: str
-    metadata: Optional[Dict[str, Any]] = None
-    response_metadata: Optional[Dict[str, Any]] = None
-    usage_metadata: Optional[Dict[str, Any]] = None
+    summary: str

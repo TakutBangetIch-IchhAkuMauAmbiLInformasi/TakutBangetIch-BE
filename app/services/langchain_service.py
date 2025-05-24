@@ -32,7 +32,6 @@ class LangchainService:
 
         papers_text = "\n\n".join(input_texts)
 
-        # Generate a single paragraph summary combining all papers
         system_prompt = (
             f"{papers_text}\n\n"
             f"Start by explaining general concept of '{query}' the first sentence"
@@ -42,7 +41,6 @@ class LangchainService:
         )
 
         print(system_prompt)
-        # Generate with parameters optimized for coherent single paragraph
         result = self.summarizer(
             system_prompt, 
             max_new_tokens=300,  # More tokens for comprehensive single paragraph
@@ -53,14 +51,11 @@ class LangchainService:
             repetition_penalty=1.1  # Prevent repetition of input text
         )
         
-        # Extract and clean the generated text
         generated_text = result[0]['generated_text']
         summary_part = generated_text[len(system_prompt):].strip()
         
-        # Clean up any artifacts and ensure single paragraph
         summary_part = summary_part.replace('\n\n', ' ').replace('\n', ' ').strip()
         
-        # Format the final output as single paragraph
         formatted_output = f"**Summary** {summary_part}\n\n**Citation**\n"
         for i, doi in enumerate(dois):
             formatted_output += f"[{i}] {doi}\n"
