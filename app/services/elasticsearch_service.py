@@ -127,13 +127,11 @@ class ElasticsearchService:
                     },
                     "mappings": {
                         "properties": {
-                            "id": {"type": "keyword"},
-                            "title": {
+                            "id": {"type": "keyword"},                            "title": {
                                 "type": "text",
                                 "analyzer": "english",
                                 "fields": {
                                     "keyword": {"type": "keyword", "normalizer": "lowercase_normalizer"},
-                                    "completion": {"type": "completion"},
                                     "exact": {"type": "text", "analyzer": "standard"}
                                 }
                             },
@@ -548,7 +546,6 @@ class ElasticsearchService:
         }
         # Remove None values
         filters = {k: v for k, v in filters.items() if v is not None}
-        
         return await self.search(
             query=query,
             filters=filters,
@@ -557,24 +554,6 @@ class ElasticsearchService:
             semantic_weight=semantic_weight,
             text_weight=text_weight
         )
-
-    async def autocomplete_title(self, prefix: str, limit: int = 5):
-        """Get title suggestions for autocomplete"""
-        response = await self.es.search(
-            index=self.index_name,
-            body={
-                "suggest": {
-                    "title_suggest": {
-                        "prefix": prefix,
-                        "completion": {
-                            "field": "title.completion",
-                            "size": limit
-                        }
-                    }
-                }
-            }
-        )
-        return response
 
     async def search_by_doi(self, doi: str):
         """Search for a paper by its DOI"""

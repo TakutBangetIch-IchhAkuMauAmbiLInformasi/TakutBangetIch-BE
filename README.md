@@ -7,7 +7,6 @@ A semantic search engine for academic papers using FastAPI, Elasticsearch, and B
 - **Hybrid Search**: Combines traditional BM25 text search with BERT-based semantic search
 - **Enhanced Embeddings**: Generates embeddings that understand both content and metadata
 - **Metadata Filters**: Search by author, category, year, DOI, and more
-- **Autocomplete**: Provides title suggestions as you type
 - **Rich Highlighting**: Shows exactly why a document matched your query
 
 ## Prerequisites
@@ -99,22 +98,17 @@ Content-Type: application/json
 }
 ```
 
-### 3. Autocomplete
-```http
-GET /api/v1/autocomplete?prefix=quant&limit=5
-```
-
-### 4. Category Listing
+### 3. Category Listing
 ```http
 GET /api/v1/categories
 ```
 
-### 5. Author Search
+### 4. Author Search
 ```http
 GET /api/v1/author/John%20Smith
 ```
 
-### 6. DOI Search
+### 5. DOI Search
 ```http
 GET /api/v1/doi/10.1088%2F1361-6463%2Fab5c71
 ```
